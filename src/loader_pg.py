@@ -1,291 +1,381 @@
 """
 PostgreSQL Relational Loader for Intelligent Fraud Ring Detection
-Loads fraudTest.csv / fraudTrain.csv into normalized PostgreSQL schema:
-- customer (deduplicated by first, last, dob)
-- account (linked to customer)
-- card (linked to account, hashed cc_num)
-- merchant (deduplicated by merchant name & category)
-- device (derived from merchant + geo-terminal proxy)
-- ip_address (derived from customer geo-location subnet proxy)
-- transaction (linked to account, card, merchant, device, ip)
+=================================================================
+Loads fraudTrain.csv and fraudTest.csv (Sparkov dataset) into the
+normalized PostgreSQL schema defined in schema.sql.
+
+Tables populated: customer, account, card, merchant, transaction.
+Tables intentionally left EMPTY: device, ip_address, analyst, alert.
+
+KNOWN LIMITATIONS (per project spec):
+  - None of the datasets contain device or IP data. We do NOT fabricate
+    device IDs or IP addresses. transaction.device_id and transaction.ip_id
+    stay NULL, and the device and ip_address tables stay empty.
+  - merchant.location is built from merch_lat and merch_long (the merchant's
+    coordinates), NOT from the cardholder's city/state.
+
+Schema extensions applied by this loader (via migrate_schema()):
+  - ALTER TABLE merchant ADD CONSTRAINT uniq_merchant_name UNIQUE (merchant_name)
+  - ALTER TABLE card ADD CONSTRAINT uniq_card_hash UNIQUE (card_number_hash)
+  - ALTER TABLE transaction ADD COLUMN trans_num VARCHAR(50) UNIQUE
+    (natural key from the CSV for idempotent reloads)
+
+The loader is idempotent: running it on both CSVs (or re-running) never
+creates duplicates, thanks to ON CONFLICT DO NOTHING on every INSERT.
 """
 
 import os
 import sys
 import hashlib
 import argparse
+import time
+from io import StringIO
 from datetime import datetime
+
 import pandas as pd
 import psycopg
+from psycopg.rows import tuple_row
 
-# Default DB Connection Parameters
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
 DB_NAME = os.getenv("PGDATABASE", "fraud_db")
 DB_USER = os.getenv("PGUSER", os.getenv("USER", "arnavbansal"))
 DB_HOST = os.getenv("PGHOST", "localhost")
 DB_PORT = os.getenv("PGPORT", "5432")
 
-def get_connection_string():
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_FILES = [
+    os.path.join(PROJECT_ROOT, "Datasets", "fraudTrain.csv"),
+    os.path.join(PROJECT_ROOT, "Datasets", "fraudTest.csv"),
+]
+
+
+def get_conn_str():
     return f"dbname={DB_NAME} user={DB_USER} host={DB_HOST} port={DB_PORT}"
 
-def hash_card(cc_num):
+
+def hash_card(cc_num: str) -> str:
     return hashlib.sha256(str(cc_num).encode("utf-8")).hexdigest()
 
-def derive_device_fingerprint(merchant_name, state):
-    # Terminal proxy: Merchant POS / payment gateway terminal cluster within a state
-    raw = f"TERM_{merchant_name.strip()}_{state.strip()}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
-def derive_ip_address(city, state):
-    # Geolocation subnet proxy: accounts in the same city/state share local ISP subnet blocks
-    octet3 = (abs(hash(state.strip())) % 250) + 1
-    octet4 = (abs(hash(city.strip())) % 250) + 1
-    return f"198.51.{octet3}.{octet4}"
+# ---------------------------------------------------------------------------
+# Schema migration — add constraints / columns the original DDL lacks
+# ---------------------------------------------------------------------------
+def migrate_schema(conn):
+    """Idempotently add the unique constraints and columns needed."""
+    with conn.cursor() as cur:
+        # 1. UNIQUE on merchant.merchant_name
+        cur.execute("""
+            SELECT 1 FROM pg_constraint
+            WHERE conrelid = 'merchant'::regclass
+              AND conname  = 'uniq_merchant_name';
+        """)
+        if not cur.fetchone():
+            print("[migrate] Adding UNIQUE(merchant_name) to merchant...")
+            cur.execute("""
+                ALTER TABLE merchant
+                ADD CONSTRAINT uniq_merchant_name UNIQUE (merchant_name);
+            """)
 
-def load_data(filepath, limit=None):
-    print(f"[*] Reading dataset: {filepath} (limit: {limit or 'ALL'})")
+        # 2. UNIQUE on card.card_number_hash
+        cur.execute("""
+            SELECT 1 FROM pg_constraint
+            WHERE conrelid = 'card'::regclass
+              AND conname  = 'uniq_card_hash';
+        """)
+        if not cur.fetchone():
+            print("[migrate] Adding UNIQUE(card_number_hash) to card...")
+            cur.execute("""
+                ALTER TABLE card
+                ADD CONSTRAINT uniq_card_hash UNIQUE (card_number_hash);
+            """)
+
+        # 3. trans_num column on transaction (natural key for idempotency)
+        cur.execute("""
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'transaction' AND column_name = 'trans_num';
+        """)
+        if not cur.fetchone():
+            print("[migrate] Adding trans_num VARCHAR(50) UNIQUE to transaction...")
+            cur.execute("""
+                ALTER TABLE transaction
+                ADD COLUMN trans_num VARCHAR(50) UNIQUE;
+            """)
+
+    conn.commit()
+    print("[migrate] Schema migration complete.")
+
+
+# ---------------------------------------------------------------------------
+# Truncate (optional fresh start)
+# ---------------------------------------------------------------------------
+def truncate_tables(conn):
+    print("[*] Truncating all tables...")
+    with conn.cursor() as cur:
+        cur.execute("""
+            TRUNCATE TABLE alert, transaction, card, account,
+                          customer, merchant, device, ip_address, analyst
+            CASCADE;
+        """)
+    conn.commit()
+    print("[+] All tables truncated.")
+
+
+# ---------------------------------------------------------------------------
+# Print row counts
+# ---------------------------------------------------------------------------
+TABLE_ORDER = [
+    "customer", "account", "card", "merchant",
+    "device", "ip_address", "transaction", "alert", "analyst",
+]
+
+def print_counts(conn, label=""):
+    with conn.cursor() as cur:
+        print(f"\n{'=' * 50}")
+        print(f"  TABLE ROW COUNTS {label}")
+        print(f"{'=' * 50}")
+        for t in TABLE_ORDER:
+            cur.execute(f"SELECT COUNT(*) FROM {t}")
+            cnt = cur.fetchone()[0]
+            cur_fraud = ""
+            if t == "transaction":
+                cur.execute("SELECT COUNT(*) FROM transaction WHERE fraud_label = TRUE")
+                fc = cur.fetchone()[0]
+                cur_fraud = f"  (fraud: {fc:,})"
+            print(f"  {t:20s} {cnt:>12,}{cur_fraud}")
+        print(f"{'=' * 50}\n")
+
+
+# ---------------------------------------------------------------------------
+# Load a single CSV into the database
+# ---------------------------------------------------------------------------
+def load_csv(conn, filepath: str, limit: int | None = None):
+    """Load one Sparkov CSV into the normalized PostgreSQL schema."""
+    print(f"\n[*] Reading {filepath} (limit: {limit or 'ALL'})...")
+    t0 = time.time()
     df = pd.read_csv(filepath, nrows=limit)
-    print(f"[*] Loaded {len(df):,} records into memory.")
-    return df
+    print(f"[*] Loaded {len(df):,} rows in {time.time() - t0:.1f}s")
 
-def populate_database(df):
-    conn_str = get_connection_string()
+    with conn.cursor() as cur:
+        # ── 1. Customers ─────────────────────────────────────────────────
+        print("[*] Upserting customers...")
+        cust_df = df[["first", "last", "dob"]].drop_duplicates()
+        cust_count = 0
+        for _, r in cust_df.iterrows():
+            fn = r["first"].strip()
+            ln = r["last"].strip()
+            dob = r["dob"]
+            email = f"{fn.lower()}.{ln.lower()}.{hash(dob) % 10000}@ringdefense.net"
+            phone = (
+                f"+1-555-{abs(hash(fn + ln)) % 900 + 100:03d}"
+                f"-{abs(hash(dob)) % 9000 + 1000:04d}"
+            )
+            cur.execute(
+                """
+                INSERT INTO customer
+                    (first_name, last_name, email, phone_number, date_of_birth, kyc_verified)
+                VALUES (%s, %s, %s, %s, %s, TRUE)
+                ON CONFLICT (email) DO NOTHING;
+                """,
+                (fn, ln, email, phone, dob),
+            )
+            cust_count += cur.rowcount
+        conn.commit()
+        print(f"[+] Customers: {cust_count:,} new rows inserted.")
+
+        # Build lookup
+        cur.execute("SELECT customer_id, first_name, last_name, date_of_birth FROM customer")
+        cust_map = {(fn, ln, str(dob)): cid for cid, fn, ln, dob in cur.fetchall()}
+
+        # ── 2. Accounts ──────────────────────────────────────────────────
+        print("[*] Upserting accounts...")
+        card_df = df[["first", "last", "dob", "cc_num"]].drop_duplicates(subset=["cc_num"])
+        acct_count = 0
+        for _, r in card_df.iterrows():
+            cid = cust_map.get((r["first"].strip(), r["last"].strip(), str(r["dob"])))
+            if not cid:
+                continue
+            acct_num = f"ACCT-{hashlib.md5(str(r['cc_num']).encode()).hexdigest()[:12].upper()}"
+            cur.execute(
+                """
+                INSERT INTO account
+                    (customer_id, account_number, account_type, balance, status)
+                VALUES (%s, %s, 'checking', 2500.00, 'active')
+                ON CONFLICT (account_number) DO NOTHING;
+                """,
+                (cid, acct_num),
+            )
+            acct_count += cur.rowcount
+        conn.commit()
+        print(f"[+] Accounts: {acct_count:,} new rows inserted.")
+
+        cur.execute("SELECT account_id, account_number FROM account")
+        acct_map = {acc_num: aid for aid, acc_num in cur.fetchall()}
+
+        # ── 3. Cards ─────────────────────────────────────────────────────
+        print("[*] Upserting cards...")
+        card_count = 0
+        for _, r in card_df.iterrows():
+            acct_num = f"ACCT-{hashlib.md5(str(r['cc_num']).encode()).hexdigest()[:12].upper()}"
+            aid = acct_map.get(acct_num)
+            if not aid:
+                continue
+            chash = hash_card(r["cc_num"])
+            cc_str = str(r["cc_num"])
+            ctype = (
+                "visa" if cc_str.startswith("4")
+                else "mastercard" if cc_str.startswith("5")
+                else "other"
+            )
+            cur.execute(
+                """
+                INSERT INTO card (account_id, card_number_hash, card_type, expiry_date, status)
+                VALUES (%s, %s, %s, '2028-12-31', 'active')
+                ON CONFLICT (card_number_hash) DO NOTHING;
+                """,
+                (aid, chash, ctype),
+            )
+            card_count += cur.rowcount
+        conn.commit()
+        print(f"[+] Cards: {card_count:,} new rows inserted.")
+
+        cur.execute("SELECT card_id, card_number_hash FROM card")
+        card_map = {h: cid for cid, h in cur.fetchall()}
+
+        # ── 4. Merchants ─────────────────────────────────────────────────
+        # IMPORTANT: location is built from merch_lat / merch_long
+        # (the merchant's coordinates), NOT the cardholder's city/state.
+        print("[*] Upserting merchants...")
+        merch_df = df[["merchant", "category", "merch_lat", "merch_long"]].drop_duplicates(
+            subset=["merchant"]
+        )
+        merch_count = 0
+        for _, r in merch_df.iterrows():
+            mname = r["merchant"].strip()
+            cat = r["category"].strip()
+            location = f"{r['merch_lat']}, {r['merch_long']}"
+            cur.execute(
+                """
+                INSERT INTO merchant (merchant_name, mcc_category, location)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (merchant_name) DO NOTHING;
+                """,
+                (mname, cat, location),
+            )
+            merch_count += cur.rowcount
+        conn.commit()
+        print(f"[+] Merchants: {merch_count:,} new rows inserted.")
+
+        cur.execute("SELECT merchant_id, merchant_name FROM merchant")
+        merch_map = {name: mid for mid, name in cur.fetchall()}
+
+        # ── 5. Transactions ──────────────────────────────────────────────
+        # NOTE: device_id and ip_id are intentionally NULL.
+        # The datasets contain no device or IP information.
+        print("[*] Inserting transactions in batches...")
+        batch = []
+        batch_size = 5000
+        total_inserted = 0
+
+        for _, r in df.iterrows():
+            acct_num = f"ACCT-{hashlib.md5(str(r['cc_num']).encode()).hexdigest()[:12].upper()}"
+            aid = acct_map.get(acct_num)
+            mid = merch_map.get(r["merchant"].strip())
+            if not aid or not mid:
+                continue
+            chash = hash_card(r["cc_num"])
+            cid = card_map.get(chash)
+
+            batch.append((
+                aid,
+                cid,
+                mid,
+                None,   # device_id — intentionally NULL
+                None,   # ip_id    — intentionally NULL
+                float(r["amt"]),
+                r["trans_date_trans_time"],
+                "approved",
+                bool(r["is_fraud"]),
+                r["trans_num"],   # natural key for idempotency
+            ))
+
+            if len(batch) >= batch_size:
+                total_inserted += _insert_txn_batch(cur, batch)
+                conn.commit()
+                batch = []
+                if total_inserted % 50000 < batch_size:
+                    print(f"    -> {total_inserted:,} transactions inserted so far...")
+
+        if batch:
+            total_inserted += _insert_txn_batch(cur, batch)
+            conn.commit()
+
+        print(f"[+] Transactions: {total_inserted:,} new rows inserted from this file.")
+
+
+def _insert_txn_batch(cur, batch):
+    """Insert a batch of transaction tuples, returning count of new rows."""
+    inserted = 0
+    for row in batch:
+        cur.execute(
+            """
+            INSERT INTO transaction
+                (account_id, card_id, merchant_id, device_id, ip_id,
+                 amount, txn_timestamp, status, fraud_label, trans_num)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (trans_num) DO NOTHING;
+            """,
+            row,
+        )
+        inserted += cur.rowcount
+    return inserted
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+def main():
+    parser = argparse.ArgumentParser(
+        description="Load Sparkov fraud CSVs into PostgreSQL (idempotent)"
+    )
+    parser.add_argument(
+        "--files", nargs="+",
+        default=DEFAULT_FILES,
+        help="CSV file(s) to load. Default: fraudTrain.csv + fraudTest.csv",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None,
+        help="Max rows per file (default: no limit = full load)",
+    )
+    parser.add_argument(
+        "--truncate", action="store_true",
+        help="Truncate all tables before loading (fresh start)",
+    )
+    args = parser.parse_args()
+
+    conn_str = get_conn_str()
     print(f"[*] Connecting to PostgreSQL ({conn_str})...")
 
     with psycopg.connect(conn_str) as conn:
-        with conn.cursor() as cur:
-            # 1. Customer deduplication
-            print("[*] Processing customers...")
-            cust_df = df[['first', 'last', 'dob', 'gender', 'street', 'city', 'state', 'zip']].drop_duplicates(
-                subset=['first', 'last', 'dob']
-            ).copy()
-            
-            # Map clean fields
-            customer_rows = []
-            for idx, r in cust_df.iterrows():
-                email = f"{r['first'].lower().strip()}.{r['last'].lower().strip()}.{hash(r['dob']) % 10000}@ringdefense.net"
-                phone = f"+1-555-{abs(hash(r['first'] + r['last'])) % 900 + 100:03d}-{abs(hash(r['dob'])) % 9000 + 1000:04d}"
-                customer_rows.append((
-                    r['first'].strip(),
-                    r['last'].strip(),
-                    email,
-                    phone,
-                    r['dob'],
-                    True  # kyc_verified
-                ))
-            
-            # Insert customers with ON CONFLICT DO NOTHING
-            cur.executemany(
-                """
-                INSERT INTO customer (first_name, last_name, email, phone_number, date_of_birth, kyc_verified)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (email) DO NOTHING;
-                """,
-                customer_rows
-            )
-            conn.commit()
-            
-            # Fetch customer IDs into lookup map
-            cur.execute("SELECT customer_id, first_name, last_name, date_of_birth FROM customer;")
-            cust_map = {}
-            for cid, fn, ln, dob in cur.fetchall():
-                cust_map[(fn, ln, str(dob))] = cid
-            print(f"[+] Synced {len(cust_map):,} customers in PostgreSQL.")
+        # Apply schema migrations first
+        migrate_schema(conn)
 
-            # 2. Account & Card mapping
-            print("[*] Processing accounts and cards...")
-            card_df = df[['first', 'last', 'dob', 'cc_num']].drop_duplicates(subset=['cc_num']).copy()
-            
-            account_rows = []
-            for _, r in card_df.iterrows():
-                cid = cust_map.get((r['first'].strip(), r['last'].strip(), str(r['dob'])))
-                if cid:
-                    acct_num = f"ACCT-{hashlib.md5(str(r['cc_num']).encode()).hexdigest()[:12].upper()}"
-                    account_rows.append((cid, acct_num, 'checking', 2500.00, 'active'))
-            
-            cur.executemany(
-                """
-                INSERT INTO account (customer_id, account_number, account_type, balance, status)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (account_number) DO NOTHING;
-                """,
-                account_rows
-            )
-            conn.commit()
-            
-            cur.execute("SELECT account_id, account_number FROM account;")
-            acct_map = {acc_num: aid for aid, acc_num in cur.fetchall()}
-            print(f"[+] Synced {len(acct_map):,} accounts in PostgreSQL.")
+        if args.truncate:
+            truncate_tables(conn)
 
-            # Insert cards
-            card_rows = []
-            for _, r in card_df.iterrows():
-                acct_num = f"ACCT-{hashlib.md5(str(r['cc_num']).encode()).hexdigest()[:12].upper()}"
-                aid = acct_map.get(acct_num)
-                if aid:
-                    card_hash = hash_card(r['cc_num'])
-                    # Determine card brand by first digit
-                    cc_str = str(r['cc_num'])
-                    ctype = 'visa' if cc_str.startswith('4') else ('mastercard' if cc_str.startswith('5') else 'other')
-                    card_rows.append((aid, card_hash, ctype, '2028-12-31', 'active'))
-            
-            cur.executemany(
-                """
-                INSERT INTO card (account_id, card_number_hash, card_type, expiry_date, status)
-                VALUES (%s, %s, %s, %s, %s);
-                """,
-                card_rows
-            )
-            conn.commit()
+        print_counts(conn, "(before load)")
 
-            cur.execute("SELECT card_id, account_id, card_number_hash FROM card;")
-            card_map = {row[2]: row[0] for row in cur.fetchall()}
-            print(f"[+] Synced {len(card_map):,} cards in PostgreSQL.")
+        for fpath in args.files:
+            if not os.path.isfile(fpath):
+                print(f"[!] File not found, skipping: {fpath}")
+                continue
+            load_csv(conn, fpath, limit=args.limit)
 
-            # 3. Merchant deduplication
-            print("[*] Processing merchants...")
-            merch_df = df[['merchant', 'category', 'city', 'state']].drop_duplicates(subset=['merchant']).copy()
-            merch_rows = [
-                (r['merchant'].strip(), r['category'].strip(), f"{r['city'].strip()}, {r['state'].strip()}")
-                for _, r in merch_df.iterrows()
-            ]
-            cur.executemany(
-                """
-                INSERT INTO merchant (merchant_name, mcc_category, location)
-                VALUES (%s, %s, %s);
-                """,
-                merch_rows
-            )
-            conn.commit()
+        print_counts(conn, "(after load)")
 
-            cur.execute("SELECT merchant_id, merchant_name FROM merchant;")
-            merch_map = {name: mid for mid, name in cur.fetchall()}
-            print(f"[+] Synced {len(merch_map):,} merchants in PostgreSQL.")
+    print("[DONE] Loader finished successfully.")
 
-            # 4. Device and IP address proxies
-            print("[*] Processing devices and IP proxies...")
-            # Compute fingerprints for all rows
-            device_records = {}
-            ip_records = {}
-            for _, r in df.iterrows():
-                dfp = derive_device_fingerprint(r['merchant'], r['state'])
-                if dfp not in device_records:
-                    device_records[dfp] = (dfp, 'pos_terminal', r['trans_date_trans_time'])
-                
-                ip = derive_ip_address(r['city'], r['state'])
-                if ip not in ip_records:
-                    ip_records[ip] = (ip, 'US', False)
-
-            # Insert devices
-            cur.executemany(
-                """
-                INSERT INTO device (device_fingerprint, device_type, last_seen_at)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (device_fingerprint) DO NOTHING;
-                """,
-                list(device_records.values())
-            )
-            conn.commit()
-
-            cur.execute("SELECT device_id, device_fingerprint FROM device;")
-            device_map = {fp: did for did, fp in cur.fetchall()}
-            print(f"[+] Synced {len(device_map):,} devices in PostgreSQL.")
-
-            # Insert IPs
-            cur.executemany(
-                """
-                INSERT INTO ip_address (ip_address, country, is_vpn)
-                VALUES (%s, %s, %s);
-                """,
-                list(ip_records.values())
-            )
-            conn.commit()
-
-            cur.execute("SELECT ip_id, ip_address FROM ip_address;")
-            ip_map = {ip: iid for iid, ip in cur.fetchall()}
-            print(f"[+] Synced {len(ip_map):,} IP addresses in PostgreSQL.")
-
-            # 5. Insert Transactions
-            print("[*] Inserting transactions in batches...")
-            txn_records = []
-            for _, r in df.iterrows():
-                acct_num = f"ACCT-{hashlib.md5(str(r['cc_num']).encode()).hexdigest()[:12].upper()}"
-                aid = acct_map.get(acct_num)
-                chash = hash_card(r['cc_num'])
-                cid = card_map.get(chash)
-                mid = merch_map.get(r['merchant'].strip())
-                dfp = derive_device_fingerprint(r['merchant'], r['state'])
-                did = device_map.get(dfp)
-                ip = derive_ip_address(r['city'], r['state'])
-                ipid = ip_map.get(ip)
-
-                if aid and mid:
-                    txn_records.append((
-                        aid,
-                        cid,
-                        mid,
-                        did,
-                        ipid,
-                        float(r['amt']),
-                        r['trans_date_trans_time'],
-                        'approved',
-                        bool(r['is_fraud'])
-                    ))
-
-            # Batch insert transactions using execute_batch or COPY
-            batch_size = 10000
-            total_txns = len(txn_records)
-            for i in range(0, total_txns, batch_size):
-                batch = txn_records[i:i + batch_size]
-                cur.executemany(
-                    """
-                    INSERT INTO transaction (
-                        account_id, card_id, merchant_id, device_id, ip_id, amount, txn_timestamp, status, fraud_label
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
-                    """,
-                    batch
-                )
-                conn.commit()
-                print(f"    -> Inserted {min(i + batch_size, total_txns):,}/{total_txns:,} transactions...")
-
-            # Summary check
-            cur.execute("SELECT COUNT(*) FROM transaction;")
-            count = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM transaction WHERE fraud_label = TRUE;")
-            fraud_count = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM customer;")
-            cust_count = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM device;")
-            dev_count = cur.fetchone()[0]
-            print(f"[SUCCESS] Step 1 Complete:")
-            print(f"    - Customers: {cust_count:,}")
-            print(f"    - Accounts: {len(acct_map):,}")
-            print(f"    - Merchants: {len(merch_map):,}")
-            print(f"    - Devices: {dev_count:,}")
-            print(f"    - IP Addresses: {len(ip_map):,}")
-            print(f"    - Transactions: {count:,} (Fraud: {fraud_count:,})")
-
-def truncate_tables():
-    conn_str = get_connection_string()
-    print("[*] Truncating existing PostgreSQL tables...")
-    with psycopg.connect(conn_str) as conn:
-        with conn.cursor() as cur:
-            cur.execute("TRUNCATE TABLE alert, transaction, card, account, customer, merchant, device, ip_address, analyst CASCADE;")
-            conn.commit()
-    print("[+] All tables truncated.")
-
-def main():
-    parser = argparse.ArgumentParser(description="Load fraud dataset into PostgreSQL")
-    parser.add_argument("--file", default="Datasets/fraudTest.csv", help="Path to CSV dataset")
-    parser.add_argument("--limit", type=int, default=50000, help="Number of records to load (default: 50,000 for rapid iteration)")
-    parser.add_argument("--truncate", action="store_true", help="Truncate tables before loading")
-    args = parser.parse_args()
-
-    if args.truncate:
-        truncate_tables()
-
-    df = load_data(args.file, limit=args.limit)
-    populate_database(df)
 
 if __name__ == "__main__":
     main()
-
