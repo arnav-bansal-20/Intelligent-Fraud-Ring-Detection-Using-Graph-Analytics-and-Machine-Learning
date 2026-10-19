@@ -1,116 +1,135 @@
 #!/usr/bin/env python3
 """
-Terminal Database Explorer for Fraud Ring Detection Project
-Displays tables, counts, schema relations, and live fraud ring clusters.
+Intelligent Fraud Ring Detection — System State Explorer
+========================================================
+Inspects and verifies the full pipeline across:
+  - Step 0: PostgreSQL relational database (tables, counts, fraud stats)
+  - Step 1: MongoDB Elliptic Bitcoin network graph
+  - Step 2: MongoDB account_graph & merchant_links (shared-merchant edges)
+  - Step 3: MongoDB fraud_features & Parquet cache
 """
 
 import os
 import psycopg
-from datetime import datetime
+from pymongo import MongoClient
 
-DB_NAME = os.getenv("PGDATABASE", "fraud_db")
-DB_USER = os.getenv("PGUSER", os.getenv("USER", "arnavbansal"))
-DB_HOST = os.getenv("PGHOST", "localhost")
-DB_PORT = os.getenv("PGPORT", "5432")
+# Database connection config
+DB_NAME   = os.getenv("PGDATABASE", "fraud_db")
+DB_USER   = os.getenv("PGUSER", os.getenv("USER", "arnavbansal"))
+DB_HOST   = os.getenv("PGHOST", "localhost")
+DB_PORT   = os.getenv("PGPORT", "5432")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+MONGO_DB  = os.getenv("MONGO_DB", "fraud_ring_db")
+
 
 def print_header(title):
     print("\n" + "=" * 80)
     print(f"  {title}")
     print("=" * 80)
 
+
 def main():
-    conn_str = f"dbname={DB_NAME} user={DB_USER} host={DB_HOST} port={DB_PORT}"
-    
-    with psycopg.connect(conn_str) as conn:
+    pg_conn_str = f"dbname={DB_NAME} user={DB_USER} host={DB_HOST} port={DB_PORT}"
+
+    # -----------------------------------------------------------------------
+    # Step 0: PostgreSQL Relational Database
+    # -----------------------------------------------------------------------
+    print_header("1. POSTGRESQL [fraud_db] — RELATIONAL TABLES (Step 0)")
+    with psycopg.connect(pg_conn_str) as conn:
         with conn.cursor() as cur:
-            # 1. Table Counts
-            print_header("POSTGRESQL [fraud_db] — TABLE INVENTORY")
-            cur.execute("""
-                SELECT 
-                    table_name, 
-                    (xpath('/row/c/text()', query_to_xml(format('select count(*) as c from %I.%I', table_schema, table_name), false, true, '')))[1]::text::int AS row_count
-                FROM information_schema.tables
-                WHERE table_schema = 'public'
-                ORDER BY row_count DESC;
-            """)
-            print(f"{'TABLE NAME':<25} {'ROW COUNT':>15}")
-            print("-" * 42)
-            for tbl, cnt in cur.fetchall():
-                print(f"{tbl:<25} {cnt:>15,}")
+            tables = [
+                "customer", "account", "card", "merchant",
+                "device", "ip_address", "transaction", "alert", "analyst"
+            ]
+            print(f"{'TABLE NAME':<25} {'ROW COUNT':>15}  STATUS / NOTES")
+            print("-" * 75)
+            for tbl in tables:
+                cur.execute(f"SELECT COUNT(*) FROM {tbl};")
+                cnt = cur.fetchone()[0]
+                if tbl in ["device", "ip_address"]:
+                    note = "Intentionally empty (no fake data)"
+                elif tbl in ["alert", "analyst"]:
+                    note = "Populated during API/Alerting (Step 7)"
+                elif tbl == "transaction":
+                    cur.execute("SELECT COUNT(*) FROM transaction WHERE fraud_label = TRUE;")
+                    fraud_cnt = cur.fetchone()[0]
+                    note = f"Includes {fraud_cnt:,} fraudulent txns ({fraud_cnt/cnt*100:.2f}%)"
+                else:
+                    note = "Loaded & verified"
+                print(f"{tbl:<25} {cnt:>15,}  {note}")
 
-            # 2. Customers & Accounts Sample
-            print_header("CUSTOMER & ACCOUNT RECORDS (First 3)")
-            cur.execute("""
-                SELECT c.customer_id, c.first_name || ' ' || c.last_name as name,
-                       c.email, a.account_number, a.account_type, a.balance
-                FROM customer c
-                JOIN account a ON c.customer_id = a.customer_id
-                LIMIT 3;
-            """)
-            print(f"{'ID':<6} {'NAME':<20} {'EMAIL':<36} {'ACCOUNT NUMBER':<20} {'BALANCE':>10}")
-            print("-" * 96)
-            for cid, name, email, acct, atype, bal in cur.fetchall():
-                print(f"{cid:<6} {name:<20} {email:<36} {acct:<20} ${float(bal):>9.2f}")
+    # -----------------------------------------------------------------------
+    # Step 1 & 2: MongoDB Graph Layer
+    # -----------------------------------------------------------------------
+    print_header("2. MONGODB [fraud_ring_db] — GRAPH & RELATIONSHIP LAYER (Steps 1 & 2)")
+    mongo_client = MongoClient(MONGO_URI)
+    db = mongo_client[MONGO_DB]
+    collections = db.list_collection_names()
 
-            # 3. Fraud Transactions Sample
-            print_header("HIGH-VALUE FRAUDULENT TRANSACTIONS (Top 5)")
-            cur.execute("""
-                SELECT t.transaction_id, c.first_name || ' ' || c.last_name as customer,
-                       m.merchant_name, t.amount, t.txn_timestamp, t.fraud_label
-                FROM transaction t
-                JOIN account a ON t.account_id = a.account_id
-                JOIN customer c ON a.customer_id = c.customer_id
-                JOIN merchant m ON t.merchant_id = m.merchant_id
-                WHERE t.fraud_label = TRUE
-                ORDER BY t.amount DESC
-                LIMIT 5;
-            """)
-            print(f"{'TXN_ID':<8} {'CUSTOMER':<18} {'MERCHANT':<36} {'AMOUNT':>10} {'TIMESTAMP':<20} {'FRAUD?':<6}")
-            print("-" * 104)
-            for tid, cust, merch, amt, ts, fl in cur.fetchall():
-                print(f"{tid:<8} {cust:<18} {merch[:34]:<36} ${float(amt):>9.2f} {str(ts):<20} {str(fl):<6}")
+    print(f"{'COLLECTION':<25} {'DOCUMENT COUNT':>15}  DESCRIPTION")
+    print("-" * 75)
+    descriptions = {
+        "elliptic_nodes": "Step 1: Bitcoin transaction nodes (illicit/licit)",
+        "elliptic_edges": "Step 1: Bitcoin transaction directed edges",
+        "merchant_links": "Step 2: Account <-> Merchant interaction edges",
+        "account_graph":  "Step 2: Shared-merchant 24h adjacency & degrees",
+        "fraud_features": "Step 3: Combined transaction + graph feature store"
+    }
+    for coll_name in sorted(descriptions.keys()):
+        cnt = db[coll_name].count_documents({}) if coll_name in collections else 0
+        desc = descriptions.get(coll_name, "")
+        print(f"{coll_name:<25} {cnt:>15,}  {desc}")
 
-            # 4. Multi-Account Shared Device Fraud Rings
-            print_header("COORDINATED FRAUD RINGS — MULTI-ACCOUNT SHARED DEVICES")
-            cur.execute("""
-                WITH fraud_devices AS (
-                    SELECT DISTINCT device_id FROM transaction WHERE fraud_label = TRUE
-                )
-                SELECT d.device_id, d.device_fingerprint, m.merchant_name,
-                       COUNT(DISTINCT t.account_id) as linked_accounts,
-                       COUNT(t.transaction_id) as total_txns,
-                       SUM(CASE WHEN t.fraud_label THEN 1 ELSE 0 END) as fraud_txns
-                FROM transaction t
-                JOIN fraud_devices fd ON t.device_id = fd.device_id
-                JOIN device d ON t.device_id = d.device_id
-                JOIN merchant m ON t.merchant_id = m.merchant_id
-                GROUP BY d.device_id, d.device_fingerprint, m.merchant_name
-                HAVING COUNT(DISTINCT t.account_id) > 1
-                ORDER BY fraud_txns DESC, linked_accounts DESC
-                LIMIT 4;
-            """)
-            rings = cur.fetchall()
-            for did, dfp, merch, accounts, txns, frauds in rings:
-                print(f"\n[!] FRAUD RING DETECTED on Device ID: {did} ({dfp[:20]}...)")
-                print(f"    Merchant: {merch}")
-                print(f"    Linked Accounts: {accounts} | Total Transactions: {txns} | Fraudulent Txns: {frauds}")
-                
-                # Fetch the accounts participating in this ring
-                cur.execute("""
-                    SELECT DISTINCT a.account_number, c.first_name || ' ' || c.last_name as name,
-                           t.amount, t.fraud_label, t.txn_timestamp
-                    FROM transaction t
-                    JOIN account a ON t.account_id = a.account_id
-                    JOIN customer c ON a.customer_id = c.customer_id
-                    WHERE t.device_id = %s
-                    ORDER BY t.fraud_label DESC, t.amount DESC
-                    LIMIT 3;
-                """, (did,))
-                for acc, cname, amt, is_fr, ts in cur.fetchall():
-                    tag = "[FRAUD]" if is_fr else "[CLEAN]"
-                    print(f"      -> {tag:<7} {acc} ({cname}) - ${float(amt):.2f} on {ts}")
+    # Inspect account_graph metrics
+    if "account_graph" in collections:
+        sample_acc = db["account_graph"].find_one()
+        degrees = [doc.get("degree", 0) for doc in db["account_graph"].find({}, {"degree": 1})]
+        if degrees:
+            avg_deg = sum(degrees) / len(degrees)
+            max_deg = max(degrees)
+            min_deg = min(degrees)
+            print(f"\n  [Account Graph Summary]:")
+            print(f"    - Total Account Nodes:   {len(degrees):,}")
+            print(f"    - Average Degree:        {avg_deg:.2f} / 998")
+            print(f"    - Min / Max Degree:      {min_deg} / {max_deg}")
+            print(f"    - Sample Account ID:     {sample_acc.get('_id')}")
+            print(f"    - Sample Linked Accounts:{len(sample_acc.get('linked_accounts', []))}")
+
+    # -----------------------------------------------------------------------
+    # Step 3: Extracted Features (MongoDB + Parquet)
+    # -----------------------------------------------------------------------
+    print_header("3. EXTRACTED FEATURES & ML READINESS (Step 3)")
+    pq_path = "data/fraud_features.parquet"
+    if os.path.exists(pq_path):
+        pq_size_mb = os.path.getsize(pq_path) / (1024 * 1024)
+        print(f"  Parquet Cache:  {pq_path} ({pq_size_mb:.1f} MB)")
+    else:
+        print(f"  Parquet Cache:  Not found")
+
+    if "fraud_features" in collections:
+        feat_cnt = db["fraud_features"].count_documents({})
+        fraud_cnt = db["fraud_features"].count_documents({"fraud_label": 1})
+        print(f"  MongoDB Store:  {feat_cnt:,} records in `fraud_features`")
+        print(f"  Class Balance:  {fraud_cnt:,} fraud ({fraud_cnt/feat_cnt*100:.2f}%) / {feat_cnt - fraud_cnt:,} clean")
+
+        print("\n  SAMPLE FEATURE VECTOR (from MongoDB):")
+        sample_feat = db["fraud_features"].find_one({"fraud_label": 1}) or db["fraud_features"].find_one()
+        if sample_feat:
+            print(f"    Transaction ID:               {sample_feat.get('transaction_id')}")
+            print(f"    Account ID / Merchant ID:     {sample_feat.get('account_id')} / {sample_feat.get('merchant_id')}")
+            print(f"    Amount / MCC Category:        ${sample_feat.get('amount'):.2f} / {sample_feat.get('mcc_category')}")
+            print(f"    Timestamp:                    {sample_feat.get('txn_timestamp')}")
+            print(f"    Customer Age / KYC:           {sample_feat.get('customer_age')} yrs / {bool(sample_feat.get('kyc_verified'))}")
+            print(f"    -- Graph Features --")
+            print(f"    Degree Centrality:            {sample_feat.get('degree_centrality'):.4f}")
+            print(f"    Shared Merchants (24h):       {sample_feat.get('shared_merchant_count_24h')}")
+            print(f"    Account Burst Velocity (24h): {sample_feat.get('trans_velocity_24h')}")
+            print(f"    Hops to Prior Fraud:          {sample_feat.get('hops_to_flagged')}")
+            print(f"    Prior Fraud Neighbors (1-hop):{sample_feat.get('prior_fraud_neighbors_count')}")
+            print(f"    Ground Truth Fraud Label:     {sample_feat.get('fraud_label')}")
 
     print("\n" + "=" * 80 + "\n")
+
 
 if __name__ == "__main__":
     main()
