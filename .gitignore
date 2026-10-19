@@ -6,6 +6,8 @@ env/
 
 # Datasets (large files > 100MB)
 Datasets/
+data/
+*.parquet
 
 # Python cache
 __pycache__/
