@@ -284,7 +284,61 @@ All code, models, and evaluation outputs are persisted and pushed to GitHub:
 
 ---
 
-## 7. Roadmap: Next Steps
+## 6. Hybrid DBMS Multi-Hop Graph Traversal Benchmark (Step 5)
+
+* **Implementation File:** [`src/benchmark.py`](src/benchmark.py)
+* **Results JSON:** [`models/benchmark_results.json`](models/benchmark_results.json)
+* **Evaluation Target:** Measure query latency to discover all connected accounts within $k$ hops ($k \in \{1, 2, 3\}$).
+* **Sample Size:** 25 unique random seed accounts sampled across low, medium, and high degree accounts in the network.
+
+### Multi-Hop Traversal Latency Benchmark
+
+| Traversal Depth | Database & Query Engine | Mean Latency | Median (p50) | 95th Percentile (p95) | Speedup vs PostgreSQL |
+|---|---|---:|---:|---:|---:|
+| **1-Hop** | **MongoDB Document BFS** | **0.64 ms** | **0.55 ms** | **0.97 ms** | **735.0x faster** |
+| | **MongoDB `$graphLookup`** | **5.84 ms** | **5.17 ms** | **8.71 ms** | **80.0x faster** |
+| | **PostgreSQL Relational CTE** | 467.18 ms | 493.64 ms | 533.21 ms | Baseline |
+| | *PostgreSQL Raw Ledger Join (1.85M rows)* | *2,989.77 ms* | *2,722.27 ms* | *4,251.07 ms* | *(4,670x slower than Mongo BFS)* |
+|---|---|---:|---:|---:|---:|
+| **2-Hop** | **MongoDB Document BFS** | **164.50 ms** | **161.67 ms** | **211.14 ms** | **5.9x faster** |
+| | **MongoDB `$graphLookup`** | **144.64 ms** | **148.92 ms** | **162.37 ms** | **6.7x faster** |
+| | **PostgreSQL Relational CTE** | 967.44 ms | 966.07 ms | 1,005.59 ms | Baseline |
+|---|---|---:|---:|---:|---:|
+| **3-Hop** | **MongoDB Document BFS** | **158.82 ms** | **154.25 ms** | **169.50 ms** | **11.5x faster** |
+| | **MongoDB `$graphLookup`** | **162.36 ms** | **161.11 ms** | **171.27 ms** | **11.3x faster** |
+| | **PostgreSQL Relational CTE** | 1,830.52 ms | 1,831.88 ms | 1,863.30 ms | Baseline |
+
+### Key Benchmark Takeaways
+1. **1-Hop Ring Lookups:** MongoDB Document BFS returns neighbor lists in sub-millisecond time (**0.64 ms**), making it **735x faster** than PostgreSQL's optimized CTE and **4,670x faster** than unindexed raw relational ledger joins.
+2. **Deep Traversals ($k=2, 3$):** While PostgreSQL's recursive CTE latency escalates from 467 ms up to 1,830 ms due to joining intermediate relational sets across 1.85M records, MongoDB's `$graphLookup` traverses depth stages in memory in **~160 ms** (**11.3x speedup** at 3 hops).
+3. **Architectural Justification:** This benchmark validates the hybrid architecture: PostgreSQL reliably enforces ACID integrity for transactions and accounts, while MongoDB accelerates real-time graph traversal and ring identification queries by up to hundreds of times.
+
+---
+
+## 7. Artifact Inventory
+
+All code, models, and evaluation outputs are persisted and pushed to GitHub:
+
+* **Source Code:**
+  * [`src/loader_pg.py`](src/loader_pg.py): Relational PostgreSQL database loader
+  * [`src/load_elliptic.py`](src/load_elliptic.py): Elliptic Bitcoin graph loader for MongoDB
+  * [`src/build_graph.py`](src/build_graph.py): SQL-derived shared merchant graph builder
+  * [`src/extract_features.py`](src/extract_features.py): Zero-leakage feature extraction pipeline
+  * [`src/train_model.py`](src/train_model.py): XGBoost training, 85/15 chronological split & ablation
+  * [`src/benchmark.py`](src/benchmark.py): Multi-hop graph traversal latency benchmark (PostgreSQL vs MongoDB)
+  * [`src/view_db.py`](src/view_db.py): Terminal system state explorer
+* **Trained Models & Outputs:**
+  * [`models/fraud_model.joblib`](models/fraud_model.joblib): Production model package (Model B + feature metadata)
+  * [`models/model_baseline.joblib`](models/model_baseline.joblib): Model A baseline serialized model
+  * [`models/model_hybrid.joblib`](models/model_hybrid.joblib): Model B hybrid serialized model
+  * [`models/metrics.json`](models/metrics.json): Raw ML metric output JSON
+  * [`models/benchmark_results.json`](models/benchmark_results.json): Multi-hop latency benchmark results
+* **Data Caches:**
+  * `data/fraud_features.parquet`: Snappy-compressed feature store (41 MB, excluded from git)
+
+---
+
+## 8. Roadmap: Next Steps
 
 | Step | Milestone | Objectives | Status |
 |---|---|---|---|
@@ -293,8 +347,8 @@ All code, models, and evaluation outputs are persisted and pushed to GitHub:
 | **Step 2** | Graph Layer Construction | 529K merchant edges, 999 account adjacencies | ✅ Completed |
 | **Step 3** | Feature Extraction | 1.85M feature vectors in MongoDB & Parquet | ✅ Completed |
 | **Step 4** | ML Model & Ablation | 85/15 split, 99.88% accuracy, 80.6% FP reduction | ✅ Completed |
-| **Step 5** | DBMS Latency Benchmark | Multi-hop ($k=1,2,3$) PostgreSQL CTE vs MongoDB `$graphLookup` | 🔜 **Next** |
-| **Step 6** | Elliptic GNN Experiment | Node classification on Bitcoin transaction graph | Pending |
+| **Step 5** | DBMS Latency Benchmark | Multi-hop ($k=1,2,3$) PostgreSQL CTE vs MongoDB `$graphLookup` | ✅ Completed |
+| **Step 6** | Elliptic GNN Experiment | Node classification on Bitcoin transaction graph | 🔜 **Next** |
 | **Step 7** | FastAPI Backend | Endpoints for inference, alerts, and ring lookups | Pending |
 | **Step 8** | Analyst Dashboard | React/Vite interface for fraud ring graph exploration | Pending |
 
