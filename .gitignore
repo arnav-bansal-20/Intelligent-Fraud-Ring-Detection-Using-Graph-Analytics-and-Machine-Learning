@@ -1,0 +1,25 @@
+# Environment & Secrets
+.env
+.env.local
+*.env
+
+# Virtual Environment & Python Cache
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Datasets (Large CSV files - >1.7 GB)
+Datasets/
+data/
+data
+*.csv
+
+# Node & Frontend Build
+node_modules/
+dist/
+
+# OS Artifacts
+.DS_Store
+*.swp
+*~
