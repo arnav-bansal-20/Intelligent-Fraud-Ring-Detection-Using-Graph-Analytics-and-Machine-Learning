@@ -9,9 +9,11 @@ Traditional bank fraud systems evaluate transactions **in isolation** using stat
 
 This project is an **Intelligent Fraud Ring Detection & Decision-Support System** that combines:
 1. **Relational Transaction Processing (PostgreSQL)** for financial integrity, account ledgers, and trigger-audited investigation trails.
-2. **Network Graph Analytics (MongoDB)** for real-time multi-hop adjacency traversal and syndicate clustering.
-3. **Supervised Machine Learning (XGBoost Classifier)** pre-trained on 1.85M transactions, achieving **97.20% Precision** by evaluating network proximity and velocity.
+2. **Network Graph Analytics (MongoDB)** for real-time multi-hop adjacency traversal and syndicate clustering using a same-merchant 24-hour co-occurrence proxy.
+3. **Supervised Machine Learning (XGBoost Classifier - Model B)** achieving **48.81% Precision, 50.97% Recall, and 47.77% PR-AUC** on held-out test data.
 4. **Decision-Support User Interface (React + Vite)** featuring Cytoscape.js graph ring visualization, an alert investigation queue, and executive governance scorecards.
+
+> **Data Scope & Nature**: This system is trained and evaluated on public simulated data (the Sparkov 1.85M transaction dataset). The graph connects accounts that shared the same merchant within a 24-hour window, serving as an educational decision-support proof-of-concept rather than a deployable live bank system. Notice that Model A + prior-fraud-count (PR-AUC 0.586, F1 0.547) outperforms Model B, demonstrating that graph features add value over transaction-only models but not over simple account history.
 
 ---
 
@@ -149,7 +151,7 @@ When an analyst needs to visualize the coordinated ring:
 ### Step 8: Manager Governance Dashboard (`/dashboard`)
 Available to managers and admins:
 1. **Live Portfolio KPIs**: Displays company transactions analyzed, company fraud rate %, and open/closed alerts.
-2. **Pre-Trained Model Governance Scorecard**: Explains the pre-trained XGBoost model's performance on the 1.85M training benchmark ($97.2\%$ Precision, $95.14\%$ PR-AUC).
+2. **Pre-Trained Model Governance Scorecard**: Explains the deployed Model B's performance on the held-out test split (48.81% Precision, 50.97% Recall, 47.77% PR-AUC at decision threshold 0.9735). Model A + prior fraud count (PR-AUC 0.5858, F1 0.5474) outperforms Model B, confirming graph features add value over transaction-only features but not over account fraud history.
 3. **Multi-Hop Traversal Latency Benchmark**: An interactive chart showing MongoDB `$graphLookup` outperforming PostgreSQL recursive CTEs by up to **8.2x**.
 
 ---

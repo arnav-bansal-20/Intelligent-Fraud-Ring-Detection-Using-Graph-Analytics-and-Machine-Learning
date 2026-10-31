@@ -42,6 +42,12 @@ class CompanyTransactionCreate(BaseModel):
     txn_timestamp: Optional[str] = Field(None, description="ISO or standard timestamp")
     notes: Optional[str] = Field(None, description="Optional bank analyst notes")
 
+class FeatureReason(BaseModel):
+    feature: str
+    description: str
+    value: float
+    contribution_level: str  # "Critical", "High", "Moderate", "Baseline"
+
 class CompanyTransactionItem(BaseModel):
     transaction_id: int
     trans_num: str
@@ -69,12 +75,6 @@ class BatchIngestResponse(BaseModel):
     low_risk_count: int
     alerts_created: int
     results: List[CompanyTransactionItem]
-
-class FeatureReason(BaseModel):
-    feature: str
-    description: str
-    value: float
-    contribution_level: str  # "Critical", "High", "Moderate", "Baseline"
 
 class TransactionScoreResponse(BaseModel):
     account_id: int
@@ -174,6 +174,7 @@ class ModelMetrics(BaseModel):
     f1_score: float
     pr_auc: float
     roc_auc: float
+    threshold: Optional[float] = None
     tradeoff_explanation: str
 
 class DashboardMetricsResponse(BaseModel):

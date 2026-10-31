@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from typing import List, Dict, Set
 from backend.schemas import RingExplorerResponse, RingNode, RingEdge
 from backend.auth import get_current_user
-from backend.database import get_pg_connection, get_mongo_db
+from backend.database import get_db, get_mongo_db, get_known_fraud_accounts
 
 router = APIRouter(prefix="/rings", tags=["Ring Explorer"])
 
@@ -10,20 +10,19 @@ router = APIRouter(prefix="/rings", tags=["Ring Explorer"])
 def get_account_ring(
     account_id: int,
     hops: int = Query(1, ge=1, le=3, description="Graph traversal depth (1 to 3 hops)"),
+    conn = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     """
     Explore the coordinated fraud ring around an account.
     Returns connected accounts from MongoDB account_graph, capped to fraud-flagged accounts
-    or the top 25 neighbors by shared merchants (since full average degree is ~835).
+    or top neighbors by shared merchants (since average degree is about 835 across 999 accounts).
     """
     mongo = get_mongo_db()
-    conn = get_pg_connection()
     cur = conn.cursor()
 
-    # 1. Fetch known fraud accounts from PostgreSQL
-    cur.execute("SELECT DISTINCT account_id FROM transaction WHERE is_fraud = true;")
-    fraud_accounts = set(r["account_id"] for r in cur.fetchall())
+    # 1. Fetch known fraud accounts from cached set
+    fraud_accounts = get_known_fraud_accounts(cur)
 
     # 2. Fetch center account from MongoDB (or construct from PG if new company account)
     center_doc = mongo.account_graph.find_one({"account_id": account_id})
@@ -38,7 +37,6 @@ def get_account_ring(
         acc_info = cur.fetchone()
         if not acc_info:
             cur.close()
-            conn.close()
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Account #{account_id} not found."
@@ -68,9 +66,8 @@ def get_account_ring(
     all_raw_neighbors = center_doc.get("neighbors", [])
     raw_degree = center_doc.get("degree", len(all_raw_neighbors))
 
-    # 3. Apply Capping Rule:
+    # 3. Apply Capping Rule for Hop 1:
     # Separate fraud-flagged peers and sort remainder by shared_merchant_count descending.
-    # Cap to top fraud accounts and top shared merchant neighbors (approx 25-35 nodes total)
     fraud_peers_all = [n for n in all_raw_neighbors if n.get("account_id") in fraud_accounts]
     sorted_fraud = sorted(fraud_peers_all, key=lambda x: x.get("shared_merchant_count", 0), reverse=True)
     fraud_peers = sorted_fraud[:20]
@@ -87,9 +84,11 @@ def get_account_ring(
     selected_account_ids: Set[int] = {account_id}
     edge_map: Dict[str, dict] = {}
 
+    hop1_ids = set()
     for n in selected_1hop:
         nid = n.get("account_id")
         selected_account_ids.add(nid)
+        hop1_ids.add(nid)
         edge_key = f"{min(account_id, nid)}_{max(account_id, nid)}"
         edge_map[edge_key] = {
             "source": f"acc_{account_id}",
@@ -97,20 +96,21 @@ def get_account_ring(
             "shared_merchants": n.get("shared_merchant_count", 1)
         }
 
-    # 4. Multi-hop expansion (hops=2 or 3) if requested
+    # 4. Multi-hop expansion: Hop 2
+    hop2_ids = set()
     if hops >= 2:
-        secondary_ids = list(selected_account_ids - {account_id})[:10]  # sample top 10 to expand
-        secondary_cursor = mongo.account_graph.find({"account_id": {"$in": secondary_ids}})
+        sec_sample = list(hop1_ids)[:10]  # sample up to 10 from hop 1
+        secondary_cursor = mongo.account_graph.find({"account_id": {"$in": sec_sample}})
         for sec_doc in secondary_cursor:
             sec_acc = sec_doc.get("account_id")
             sec_neighbors = sec_doc.get("neighbors", [])
-            # Priority: fraud neighbors first
             sec_fraud = [sn for sn in sec_neighbors if sn.get("account_id") in fraud_accounts][:5]
             sec_top = sorted(sec_neighbors, key=lambda x: x.get("shared_merchant_count", 0), reverse=True)[:5]
             for sn in (sec_fraud + sec_top):
                 sn_id = sn.get("account_id")
-                if len(selected_account_ids) < 45:  # safe upper bound for UI responsiveness
+                if len(selected_account_ids) < 45:
                     selected_account_ids.add(sn_id)
+                    hop2_ids.add(sn_id)
                     edge_key = f"{min(sec_acc, sn_id)}_{max(sec_acc, sn_id)}"
                     if edge_key not in edge_map:
                         edge_map[edge_key] = {
@@ -119,12 +119,33 @@ def get_account_ring(
                             "shared_merchants": sn.get("shared_merchant_count", 1)
                         }
 
-    # 5. Enrich account nodes with PostgreSQL relational data
+    # Multi-hop expansion: Hop 3
+    if hops >= 3 and hop2_ids:
+        tert_sample = list(hop2_ids - hop1_ids - {account_id})[:8]
+        tertiary_cursor = mongo.account_graph.find({"account_id": {"$in": tert_sample}})
+        for tert_doc in tertiary_cursor:
+            tert_acc = tert_doc.get("account_id")
+            tert_neighbors = tert_doc.get("neighbors", [])
+            tert_fraud = [tn for tn in tert_neighbors if tn.get("account_id") in fraud_accounts][:4]
+            tert_top = sorted(tert_neighbors, key=lambda x: x.get("shared_merchant_count", 0), reverse=True)[:4]
+            for tn in (tert_fraud + tert_top):
+                tn_id = tn.get("account_id")
+                if len(selected_account_ids) < 45:
+                    selected_account_ids.add(tn_id)
+                    edge_key = f"{min(tert_acc, tn_id)}_{max(tert_acc, tn_id)}"
+                    if edge_key not in edge_map:
+                        edge_map[edge_key] = {
+                            "source": f"acc_{tert_acc}",
+                            "target": f"acc_{tn_id}",
+                            "shared_merchants": tn.get("shared_merchant_count", 1)
+                        }
+
+    # 5. Enrich account nodes with PostgreSQL relational data using real account_number
     id_list = list(selected_account_ids)
     cur.execute("""
         SELECT
             a.account_id,
-            'ACC-' || LPAD(a.account_id::text, 6, '0') AS account_number,
+            COALESCE(a.account_number, 'ACC-' || LPAD(a.account_id::text, 6, '0')) AS account_number,
             c.first_name || ' ' || c.last_name AS customer_name,
             c.city || ', ' || c.state AS city_state
         FROM account a
@@ -144,7 +165,6 @@ def get_account_ring(
     shared_with_center = {n.get("account_id"): n.get("shared_merchant_count", 0) for n in all_raw_neighbors}
 
     cur.close()
-    conn.close()
 
     # 6. Build Cytoscape-compatible Node and Edge payloads
     nodes: List[RingNode] = []
@@ -190,9 +210,5 @@ def get_account_ring(
         capped_nodes_count=len(nodes),
         nodes=nodes,
         edges=edges,
-        density_note=(
-            "Dense Graph Optimization: Average node degree across 1.85M transactions is ~835. "
-            "To provide immediate visual clarity for fraud analysts, this view is capped to fraud-flagged "
-            "accounts and the top 25 neighbors by shared merchants."
-        )
+        density_note="Dense Graph Optimization: average degree about 835 across 999 accounts. To provide visual clarity for fraud analysts, this view is capped to fraud-flagged accounts and top neighbors by shared merchants."
     )

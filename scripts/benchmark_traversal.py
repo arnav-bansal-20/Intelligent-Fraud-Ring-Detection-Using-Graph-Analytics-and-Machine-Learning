@@ -175,7 +175,30 @@ def run_benchmark(trials: int = 15, test_accounts = None):
 
     cur.close()
     conn.close()
-    return results
+
+    # Save to models/benchmark_results.json matching BenchmarkHopResult schema
+    models_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models"))
+    os.makedirs(models_dir, exist_ok=True)
+    out_file = os.path.join(models_dir, "benchmark_results.json")
+    
+    formatted_results = [
+        {
+            "hops": r["hops"],
+            "discovered_nodes": round(float(r["avg_discovered"]), 1),
+            "postgres_cte_latency_ms": round(float(r["pg_mean"]), 2),
+            "postgres_cte_p95_ms": round(float(r["pg_p95"]), 2),
+            "mongodb_graph_latency_ms": round(float(r["mongo_mean"]), 2),
+            "mongodb_graph_p95_ms": round(float(r["mongo_p95"]), 2),
+            "speedup": f"{r['speedup']:.1f}x"
+        }
+        for r in results
+    ]
+    import json
+    with open(out_file, "w") as f:
+        json.dump(formatted_results, f, indent=2)
+    logger.info(f"Saved benchmark results to {out_file}")
+
+    return formatted_results
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Graph Traversal Benchmark")

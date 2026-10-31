@@ -3,15 +3,16 @@ import uuid
 import joblib
 import numpy as np
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from backend.schemas import (
     CompanyTransactionCreate, CompanyTransactionItem,
     BatchIngestRequest, BatchIngestResponse, FeatureReason
 )
-from backend.auth import get_current_user
-from backend.database import get_pg_connection, get_mongo_db
+from backend.auth import get_current_user, require_roles
+from backend.database import get_db, get_mongo_db, get_known_fraud_accounts
+from backend.features import compute_transaction_features
 from backend.config import MODEL_PATH
 
 router = APIRouter(prefix="/transactions", tags=["Company Transactions & AI Analysis"])
@@ -28,7 +29,7 @@ def get_model():
     return _model_bundle
 
 def get_or_create_account(cur, account_id: Optional[int] = None, account_number: Optional[str] = None, customer_name: Optional[str] = None):
-    """Resolve an account by ID or account number, or auto-create customer and account."""
+    """Resolve an account by ID or account number, or auto-create customer and account handling unique constraints."""
     if account_id:
         cur.execute("""
             SELECT a.account_id, a.account_number, c.first_name || ' ' || c.last_name as customer_name
@@ -56,7 +57,7 @@ def get_or_create_account(cur, account_id: Optional[int] = None, account_number:
     parts = cust_name.split(" ", 1)
     first_name = parts[0]
     last_name = parts[1] if len(parts) > 1 else "Corp"
-    email = f"{first_name.lower()}.{last_name.lower()}_{uuid.uuid4().hex[:4]}@companybank.com"
+    email = f"{first_name.lower()}.{last_name.lower()}_{uuid.uuid4().hex[:6]}@companybank.com"
 
     cur.execute("""
         INSERT INTO customer (first_name, last_name, email, street, city, state, zip)
@@ -66,12 +67,25 @@ def get_or_create_account(cur, account_id: Optional[int] = None, account_number:
     cust_id = cur.fetchone()["customer_id"]
 
     acc_num = account_number if account_number else f"ACC-{uuid.uuid4().hex[:8].upper()}"
-    cur.execute("""
-        INSERT INTO account (customer_id, account_number, status)
-        VALUES (%s, %s, 'active')
-        RETURNING account_id;
-    """, (cust_id, acc_num))
-    acc_id = cur.fetchone()["account_id"]
+    try:
+        cur.execute("""
+            INSERT INTO account (customer_id, account_number, status)
+            VALUES (%s, %s, 'active')
+            ON CONFLICT (account_number) DO UPDATE
+            SET status = account.status
+            RETURNING account_id, account_number;
+        """, (cust_id, acc_num))
+        acc_row = cur.fetchone()
+        acc_id = acc_row["account_id"]
+        acc_num = acc_row["account_number"]
+    except Exception:
+        cur.execute("SELECT account_id, account_number FROM account WHERE account_number = %s;", (acc_num,))
+        existing = cur.fetchone()
+        if existing:
+            acc_id = existing["account_id"]
+            acc_num = existing["account_number"]
+        else:
+            raise
 
     return acc_id, acc_num, f"{first_name} {last_name}"
 
@@ -89,16 +103,16 @@ def get_or_create_merchant(cur, merchant_id: Optional[int] = None, merchant_name
         if row:
             return row["merchant_id"], row["merchant_name"]
 
-        # Insert new merchant
         cur.execute("""
             INSERT INTO merchant (merchant_name, category)
             VALUES (%s, 'Commercial & Banking')
-            RETURNING merchant_id;
+            ON CONFLICT (merchant_name) DO UPDATE SET category = EXCLUDED.category
+            RETURNING merchant_id, merchant_name;
         """, (merchant_name.strip(),))
-        new_id = cur.fetchone()["merchant_id"]
-        return new_id, merchant_name.strip()
+        row = cur.fetchone()
+        if row:
+            return row["merchant_id"], row["merchant_name"]
 
-    # Fallback default merchant
     cur.execute("SELECT merchant_id, merchant_name FROM merchant LIMIT 1;")
     fallback = cur.fetchone()
     if fallback:
@@ -114,94 +128,51 @@ def evaluate_transaction_ai(
     cur,
     mongo,
     model,
-    feature_cols: List[str]
+    feature_cols: List[str],
+    high_threshold: float,
+    medium_threshold: float
 ):
-    """Extract dynamic graph & velocity features, predict with XGBoost, and compute explainability factors."""
-    hour = dt.hour
-    day_of_week = dt.weekday()
+    """Extract dynamic graph & velocity features using shared module and predict with calibrated thresholds."""
+    fraud_accounts = get_known_fraud_accounts(cur)
 
-    # Known fraud accounts
-    cur.execute("SELECT DISTINCT account_id FROM transaction WHERE is_fraud = true;")
-    fraud_accounts = set(r["account_id"] for r in cur.fetchall())
-
-    # MongoDB graph document
-    acc_doc = mongo.account_graph.find_one({"account_id": account_id})
-    neighbors = acc_doc.get("neighbors", []) if acc_doc else []
-    degree = acc_doc.get("degree", len(neighbors)) if acc_doc else 0
-    degree_centrality = float(degree) / 999.0
-
-    prior_fraud_neighbors_count = sum(1 for n in neighbors if n.get("account_id") in fraud_accounts)
-
-    # Shortest hops to flagged
-    if account_id in fraud_accounts:
-        hops_to_flagged = 0
-    elif prior_fraud_neighbors_count > 0:
-        hops_to_flagged = 1
-    else:
-        neighbor_ids = [n.get("account_id") for n in neighbors[:50]]
-        two_hop_flagged = mongo.account_graph.count_documents({
-            "account_id": {"$in": neighbor_ids},
-            "neighbors.account_id": {"$in": list(fraud_accounts)}
-        }) if neighbor_ids else 0
-        hops_to_flagged = 2 if two_hop_flagged > 0 else 3
-
-    # Velocity features in 24h
-    iso_time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-    cur.execute("""
-        SELECT COUNT(*) as velocity
-        FROM transaction
-        WHERE account_id = %s
-          AND txn_timestamp BETWEEN (%s::timestamp - interval '24 hours') AND %s::timestamp;
-    """, (account_id, iso_time_str, iso_time_str))
-    vel_row = cur.fetchone()
-    trans_velocity_24h = vel_row["velocity"] if vel_row else 0
-
-    # Shared merchant count in 24h
-    cur.execute("""
-        SELECT COUNT(DISTINCT account_id) as shared_cnt
-        FROM transaction
-        WHERE merchant_id = %s
-          AND txn_timestamp BETWEEN (%s::timestamp - interval '24 hours') AND %s::timestamp
-          AND account_id <> %s;
-    """, (merchant_id, iso_time_str, iso_time_str, account_id))
-    merch_row = cur.fetchone()
-    shared_merchant_count_24h = merch_row["shared_cnt"] if merch_row else 0
-
-    feature_dict = {
-        "amount": float(amount),
-        "hour": int(hour),
-        "day_of_week": int(day_of_week),
-        "hops_to_flagged": float(hops_to_flagged),
-        "degree_centrality": float(degree_centrality),
-        "shared_merchant_count_24h": float(shared_merchant_count_24h),
-        "trans_velocity_24h": float(trans_velocity_24h),
-        "prior_fraud_neighbors_count": float(prior_fraud_neighbors_count)
-    }
+    feature_dict = compute_transaction_features(
+        account_id=account_id,
+        merchant_id=merchant_id,
+        amount=amount,
+        dt=dt,
+        cur=cur,
+        mongo=mongo,
+        fraud_accounts=fraud_accounts
+    )
 
     feature_vector = np.array([[feature_dict[col] for col in feature_cols]])
     pred_prob = float(model.predict_proba(feature_vector)[0, 1])
     fraud_probability = round(pred_prob, 4)
 
-    if fraud_probability >= 0.70:
+    # Calibrated risk label
+    if fraud_probability >= high_threshold:
         risk_label = "High"
-    elif fraud_probability >= 0.30:
+    elif fraud_probability >= medium_threshold:
         risk_label = "Medium"
     else:
         risk_label = "Low"
 
-    # Top explanatory reasons
+    hops_to_flagged = feature_dict["hops_to_flagged"]
+    prior_fraud_neighbors_count = feature_dict["prior_fraud_neighbors_count"]
+    trans_velocity_24h = feature_dict["trans_velocity_24h"]
+
     top_reasons: List[FeatureReason] = []
     if hops_to_flagged <= 1:
         top_reasons.append(FeatureReason(
             feature="hops_to_flagged",
-            description=f"Account is {hops_to_flagged} hop(s) directly adjacent to flagged syndicate nodes.",
+            description=f"Account is {int(hops_to_flagged)} hop(s) directly adjacent to flagged syndicate nodes.",
             value=float(hops_to_flagged),
             contribution_level="Critical"
         ))
     if prior_fraud_neighbors_count > 0:
         top_reasons.append(FeatureReason(
             feature="prior_fraud_neighbors_count",
-            description=f"Direct merchant network overlap with {prior_fraud_neighbors_count} confirmed fraud accounts.",
+            description=f"Direct merchant network overlap with {int(prior_fraud_neighbors_count)} confirmed fraud accounts.",
             value=float(prior_fraud_neighbors_count),
             contribution_level="High"
         ))
@@ -215,16 +186,9 @@ def evaluate_transaction_ai(
     if trans_velocity_24h >= 3:
         top_reasons.append(FeatureReason(
             feature="trans_velocity_24h",
-            description=f"High transaction frequency burst: {trans_velocity_24h} transactions in past 24 hours.",
+            description=f"High transaction frequency burst: {int(trans_velocity_24h)} transactions in past 24 hours.",
             value=float(trans_velocity_24h),
             contribution_level="High"
-        ))
-    if hour in [0, 1, 2, 3, 4, 5]:
-        top_reasons.append(FeatureReason(
-            feature="hour",
-            description=f"Initiated during off-peak night window ({hour:02d}:00 UTC).",
-            value=float(hour),
-            contribution_level="Moderate"
         ))
     if not top_reasons:
         top_reasons.append(FeatureReason(
@@ -239,15 +203,20 @@ def evaluate_transaction_ai(
 @router.post("", response_model=CompanyTransactionItem)
 def create_and_analyze_transaction(
     req: CompanyTransactionCreate,
+    conn = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     """
     Ingest a company/bank transaction record and immediately analyze with the AI fraud model.
-    Saves to PostgreSQL (source='company') and generates alerts for high-conviction fraud risks.
+    Saves to PostgreSQL (source='company') with predicted_fraud and fraud_probability.
+    Keeps is_fraud = false until analyst confirmed.
     """
     bundle = get_model()
     model = bundle["model"]
     feature_cols = bundle["feature_cols"]
+
+    high_threshold = float(bundle.get("threshold", 0.9735))
+    medium_threshold = round(high_threshold * 0.5, 4)
 
     # Parse timestamp
     if req.txn_timestamp:
@@ -258,7 +227,6 @@ def create_and_analyze_transaction(
     else:
         dt = datetime.now(timezone.utc)
 
-    conn = get_pg_connection()
     cur = conn.cursor()
     mongo = get_mongo_db()
 
@@ -272,19 +240,20 @@ def create_and_analyze_transaction(
 
     # Run AI evaluation
     prob, risk_label, reasons, _ = evaluate_transaction_ai(
-        acc_id, merch_id, req.amount, dt, cur, mongo, model, feature_cols
+        acc_id, merch_id, req.amount, dt, cur, mongo, model, feature_cols,
+        high_threshold, medium_threshold
     )
-    is_fraud = (prob >= 0.70)
+    predicted_fraud = (prob >= high_threshold)
 
-    # Insert into PostgreSQL
+    # Insert into PostgreSQL with source='company', predicted_fraud, fraud_probability, is_fraud=False
     trans_num = f"cmp_{int(datetime.now().timestamp() * 1000)}_{uuid.uuid4().hex[:6]}"
     iso_time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
 
     cur.execute("""
-        INSERT INTO transaction (account_id, merchant_id, trans_num, amount, txn_timestamp, is_fraud, source)
-        VALUES (%s, %s, %s, %s, %s, %s, 'company')
+        INSERT INTO transaction (account_id, merchant_id, trans_num, amount, txn_timestamp, source, predicted_fraud, fraud_probability, is_fraud)
+        VALUES (%s, %s, %s, %s, %s, 'company', %s, %s, false)
         RETURNING transaction_id, txn_timestamp;
-    """, (acc_id, merch_id, trans_num, req.amount, iso_time_str, is_fraud))
+    """, (acc_id, merch_id, trans_num, req.amount, iso_time_str, predicted_fraud, prob))
     tx_row = cur.fetchone()
     tx_id = tx_row["transaction_id"]
     created_at_str = str(tx_row["txn_timestamp"])
@@ -303,19 +272,7 @@ def create_and_analyze_transaction(
             alert_id = al_row["alert_id"]
 
     conn.commit()
-
-    # Update MongoDB graph
-    try:
-        mongo.account_graph.update_one(
-            {"account_id": acc_id},
-            {"$inc": {"degree": 1}},
-            upsert=True
-        )
-    except Exception:
-        pass
-
     cur.close()
-    conn.close()
 
     return CompanyTransactionItem(
         transaction_id=tx_id,
@@ -329,7 +286,7 @@ def create_and_analyze_transaction(
         txn_timestamp=iso_time_str,
         fraud_probability=prob,
         risk_label=risk_label,
-        is_fraud=is_fraud,
+        is_fraud=False,
         alert_id=alert_id,
         top_reasons=reasons,
         created_at=created_at_str
@@ -338,16 +295,25 @@ def create_and_analyze_transaction(
 @router.post("/batch", response_model=BatchIngestResponse)
 def batch_ingest_transactions(
     req: BatchIngestRequest,
+    conn = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Ingest multiple company/bank transaction records in batch and run AI scoring on each.
+    Ingest multiple company/bank transaction records in batch (max 200) and run AI scoring on each.
+    Handles individual bad rows gracefully with savepoints.
     """
+    if len(req.transactions) > 200:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Batch size {len(req.transactions)} exceeds maximum allowed limit of 200 transactions."
+        )
+
     bundle = get_model()
     model = bundle["model"]
     feature_cols = bundle["feature_cols"]
+    high_threshold = float(bundle.get("threshold", 0.9735))
+    medium_threshold = round(high_threshold * 0.5, 4)
 
-    conn = get_pg_connection()
     cur = conn.cursor()
     mongo = get_mongo_db()
 
@@ -357,81 +323,87 @@ def batch_ingest_transactions(
     low_cnt = 0
     alerts_created = 0
 
-    for item in req.transactions:
-        # Parse timestamp
-        if item.txn_timestamp:
-            try:
-                dt = datetime.fromisoformat(item.txn_timestamp.replace("Z", "+00:00"))
-            except Exception:
+    for idx, item in enumerate(req.transactions):
+        cur.execute(f"SAVEPOINT sp_{idx};")
+        try:
+            if item.txn_timestamp:
+                try:
+                    dt = datetime.fromisoformat(item.txn_timestamp.replace("Z", "+00:00"))
+                except Exception:
+                    dt = datetime.now(timezone.utc)
+            else:
                 dt = datetime.now(timezone.utc)
-        else:
-            dt = datetime.now(timezone.utc)
 
-        acc_id, acc_num, cust_name = get_or_create_account(
-            cur, item.account_id, item.account_number, item.customer_name
-        )
-        merch_id, merch_name = get_or_create_merchant(
-            cur, item.merchant_id, item.merchant_name
-        )
+            acc_id, acc_num, cust_name = get_or_create_account(
+                cur, item.account_id, item.account_number, item.customer_name
+            )
+            merch_id, merch_name = get_or_create_merchant(
+                cur, item.merchant_id, item.merchant_name
+            )
 
-        prob, risk_label, reasons, _ = evaluate_transaction_ai(
-            acc_id, merch_id, item.amount, dt, cur, mongo, model, feature_cols
-        )
-        is_fraud = (prob >= 0.70)
+            prob, risk_label, reasons, _ = evaluate_transaction_ai(
+                acc_id, merch_id, item.amount, dt, cur, mongo, model, feature_cols,
+                high_threshold, medium_threshold
+            )
+            predicted_fraud = (prob >= high_threshold)
 
-        if risk_label == "High":
-            high_cnt += 1
-        elif risk_label == "Medium":
-            med_cnt += 1
-        else:
-            low_cnt += 1
+            if risk_label == "High":
+                high_cnt += 1
+            elif risk_label == "Medium":
+                med_cnt += 1
+            else:
+                low_cnt += 1
 
-        trans_num = f"cmp_{int(datetime.now().timestamp() * 1000)}_{uuid.uuid4().hex[:6]}"
-        iso_time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+            trans_num = f"cmp_{int(datetime.now().timestamp() * 1000)}_{uuid.uuid4().hex[:6]}"
+            iso_time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
 
-        cur.execute("""
-            INSERT INTO transaction (account_id, merchant_id, trans_num, amount, txn_timestamp, is_fraud, source)
-            VALUES (%s, %s, %s, %s, %s, %s, 'company')
-            RETURNING transaction_id, txn_timestamp;
-        """, (acc_id, merch_id, trans_num, item.amount, iso_time_str, is_fraud))
-        tx_row = cur.fetchone()
-        tx_id = tx_row["transaction_id"]
-        created_at_str = str(tx_row["txn_timestamp"])
-
-        alert_id = None
-        if risk_label == "High":
-            note_text = item.notes or f"Batch Ingestion: XGBoost probability {prob:.2%}. {reasons[0].description}"
             cur.execute("""
-                INSERT INTO alert (transaction_id, analyst_id, fraud_probability, risk_label, status, note)
-                VALUES (%s, %s, %s, %s, 'open', %s)
-                RETURNING alert_id;
-            """, (tx_id, current_user.get("analyst_id"), prob, risk_label, note_text))
-            al_row = cur.fetchone()
-            if al_row:
-                alert_id = al_row["alert_id"]
-                alerts_created += 1
+                INSERT INTO transaction (account_id, merchant_id, trans_num, amount, txn_timestamp, source, predicted_fraud, fraud_probability, is_fraud)
+                VALUES (%s, %s, %s, %s, %s, 'company', %s, %s, false)
+                RETURNING transaction_id, txn_timestamp;
+            """, (acc_id, merch_id, trans_num, item.amount, iso_time_str, predicted_fraud, prob))
+            tx_row = cur.fetchone()
+            tx_id = tx_row["transaction_id"]
+            created_at_str = str(tx_row["txn_timestamp"])
 
-        results.append(CompanyTransactionItem(
-            transaction_id=tx_id,
-            trans_num=trans_num,
-            account_id=acc_id,
-            account_number=acc_num,
-            customer_name=cust_name,
-            merchant_id=merch_id,
-            merchant_name=merch_name,
-            amount=item.amount,
-            txn_timestamp=iso_time_str,
-            fraud_probability=prob,
-            risk_label=risk_label,
-            is_fraud=is_fraud,
-            alert_id=alert_id,
-            top_reasons=reasons,
-            created_at=created_at_str
-        ))
+            alert_id = None
+            if risk_label == "High":
+                note_text = item.notes or f"Batch Ingestion: XGBoost probability {prob:.2%}. {reasons[0].description}"
+                cur.execute("""
+                    INSERT INTO alert (transaction_id, analyst_id, fraud_probability, risk_label, status, note)
+                    VALUES (%s, %s, %s, %s, 'open', %s)
+                    RETURNING alert_id;
+                """, (tx_id, current_user.get("analyst_id"), prob, risk_label, note_text))
+                al_row = cur.fetchone()
+                if al_row:
+                    alert_id = al_row["alert_id"]
+                    alerts_created += 1
+
+            cur.execute(f"RELEASE SAVEPOINT sp_{idx};")
+
+            results.append(CompanyTransactionItem(
+                transaction_id=tx_id,
+                trans_num=trans_num,
+                account_id=acc_id,
+                account_number=acc_num,
+                customer_name=cust_name,
+                merchant_id=merch_id,
+                merchant_name=merch_name,
+                amount=item.amount,
+                txn_timestamp=iso_time_str,
+                fraud_probability=prob,
+                risk_label=risk_label,
+                is_fraud=False,
+                alert_id=alert_id,
+                top_reasons=reasons,
+                created_at=created_at_str
+            ))
+        except Exception as e:
+            cur.execute(f"ROLLBACK TO SAVEPOINT sp_{idx};")
+            continue
 
     conn.commit()
     cur.close()
-    conn.close()
 
     return BatchIngestResponse(
         total_ingested=len(results),
@@ -447,13 +419,17 @@ def list_company_transactions(
     risk_label: Optional[str] = Query(None, pattern="^(Low|Medium|High)$"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    conn = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Retrieve user-added company/bank transaction records with their AI analysis scores.
-    Excludes the 1.85M training dataset.
+    Retrieve user-added company/bank transaction records with their real stored AI analysis scores.
+    Correctly filters by risk label across all transactions (including Low/Medium without alerts).
     """
-    conn = get_pg_connection()
+    bundle = get_model()
+    high_threshold = float(bundle.get("threshold", 0.9735))
+    medium_threshold = round(high_threshold * 0.5, 4)
+
     cur = conn.cursor()
 
     sql = """
@@ -468,10 +444,11 @@ def list_company_transactions(
             t.amount,
             t.txn_timestamp::text as txn_timestamp,
             t.is_fraud,
+            t.predicted_fraud,
+            t.fraud_probability::float as fraud_probability,
             t.txn_timestamp::text as created_at,
             al.alert_id,
-            al.fraud_probability,
-            al.risk_label
+            al.risk_label as alert_risk_label
         FROM transaction t
         JOIN account a ON a.account_id = t.account_id
         JOIN customer c ON c.customer_id = a.customer_id
@@ -480,9 +457,16 @@ def list_company_transactions(
         WHERE t.source = 'company'
     """
     params = []
-    if risk_label:
-        sql += " AND al.risk_label = %s"
-        params.append(risk_label)
+
+    if risk_label == "High":
+        sql += " AND (al.risk_label = 'High' OR t.fraud_probability >= %s)"
+        params.append(high_threshold)
+    elif risk_label == "Medium":
+        sql += " AND (al.risk_label = 'Medium' OR (t.fraud_probability >= %s AND t.fraud_probability < %s))"
+        params.extend([medium_threshold, high_threshold])
+    elif risk_label == "Low":
+        sql += " AND (al.risk_label = 'Low' OR t.fraud_probability < %s OR t.fraud_probability IS NULL)"
+        params.append(medium_threshold)
 
     sql += " ORDER BY t.transaction_id DESC LIMIT %s OFFSET %s;"
     params.extend([limit, offset])
@@ -490,13 +474,19 @@ def list_company_transactions(
     cur.execute(sql, tuple(params))
     rows = cur.fetchall()
     cur.close()
-    conn.close()
 
     results = []
     for r in rows:
-        # Default probability if no alert was created
-        prob = float(r["fraud_probability"]) if r["fraud_probability"] is not None else (0.85 if r["is_fraud"] else 0.05)
-        label = r["risk_label"] or ("High" if prob >= 0.70 else "Medium" if prob >= 0.30 else "Low")
+        prob = float(r["fraud_probability"]) if r["fraud_probability"] is not None else 0.0
+        if r["alert_risk_label"]:
+            label = r["alert_risk_label"]
+        elif prob >= high_threshold:
+            label = "High"
+        elif prob >= medium_threshold:
+            label = "Medium"
+        else:
+            label = "Low"
+
         results.append(CompanyTransactionItem(
             transaction_id=r["transaction_id"],
             trans_num=r["trans_num"],
@@ -517,10 +507,12 @@ def list_company_transactions(
     return results
 
 @router.post("/demo-batch", response_model=BatchIngestResponse)
-def load_company_demo_batch(current_user: dict = Depends(get_current_user)):
+def load_company_demo_batch(
+    conn = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin"]))
+):
     """
-    Convenience endpoint: injects a realistic set of 6 bank transactions
-    (legitimate retail, velocity burst, and a high-risk coordinated syndicate ring attempt)
+    Admin-only endpoint: injects a realistic set of 6 bank transactions
     so analysts can immediately evaluate the AI scoring and dashboard metrics.
     """
     demo_data = [
@@ -574,16 +566,19 @@ def load_company_demo_batch(current_user: dict = Depends(get_current_user)):
 
     return batch_ingest_transactions(
         BatchIngestRequest(transactions=demo_data),
+        conn=conn,
         current_user=current_user
     )
 
 @router.delete("/clear")
-def clear_company_transactions(current_user: dict = Depends(get_current_user)):
+def clear_company_transactions(
+    conn = Depends(get_db),
+    current_user: dict = Depends(require_roles(["admin"]))
+):
     """
-    Clear all user-added company transactions and alerts.
+    Admin-only endpoint: Clear all user-added company transactions and alerts.
     Leaves the pre-trained ML model and training dataset untouched.
     """
-    conn = get_pg_connection()
     cur = conn.cursor()
 
     cur.execute("""
@@ -595,6 +590,5 @@ def clear_company_transactions(current_user: dict = Depends(get_current_user)):
     cur.execute("DELETE FROM transaction WHERE source = 'company';")
     conn.commit()
     cur.close()
-    conn.close()
 
     return {"message": "Company transaction records and alerts cleared successfully."}

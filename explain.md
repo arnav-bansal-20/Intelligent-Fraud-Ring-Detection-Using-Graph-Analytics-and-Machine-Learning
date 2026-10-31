@@ -50,7 +50,7 @@ flowchart TD
     end
 
     subgraph MLEngine ["Machine Learning Layer"]
-        XGB["XGBoost Classifier (97.2% Precision)"]
+        XGB["XGBoost Classifier (Model B: Deployed Hybrid)"]
     end
 
     UI -->|REST / JWT| API
@@ -367,45 +367,54 @@ To overcome this, the training pipeline implements three defensive engineering s
 
 ---
 
-### 6.4 The Baseline vs. Graph-Augmented Empirical Lift
+### 6.4 The Baseline vs. Graph-Augmented Empirical Benchmark Suite
 
-To prove the necessity of hybrid database graph analytics, an ablation study was conducted during model development comparing a **Baseline Model** against the **Graph-Augmented Model**:
+To evaluate the empirical impact of network features, a comprehensive 6-model benchmark suite was conducted on the held-out chronological test split (15%, 277,860 transactions), evaluated at validation-calibrated thresholds:
 
-| Metric | Baseline Model (Transaction Attributes Only: `amount`, `hour`, `day_of_week`) | Graph-Augmented Model (+ MongoDB Hops, Degree, Shared Merchants, Velocity) | Relative Improvement (Lift) |
-| :--- | :---: | :---: | :---: |
-| **Precision** | 33.82% | **97.20%** | **+187.4% Lift** |
-| **Recall** | 8.14% | **11.98%** | **+47.2% Lift** |
-| **F1-Score** | 13.12% | **21.34%** | **+62.7% Lift** |
-| **PR-AUC** | 38.65% | **95.14%** | **+146.2% Lift** |
-| **ROC-AUC** | 76.40% | **98.04%** | **+28.3% Lift** |
+| Model | Decision Threshold | Precision | Recall | F1-Score | PR-AUC | ROC-AUC | False Positives (FP) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **1. Logistic Regression** (Baseline, scaled) | 0.9796 | 25.60% | 43.94% | 32.35% | 11.93% | 83.61% | 1,180 |
+| **2. Random Forest** (Baseline, balanced) | 0.9807 | 53.11% | 51.73% | 52.41% | 48.19% | 97.67% | 422 |
+| **3. XGBoost Model A** (Transaction Only) | 0.9799 | 44.13% | 55.74% | 49.26% | 43.77% | 98.01% | 652 |
+| **4. XGBoost Model B** (Transaction + Graph) | 0.9735 | **48.81%** | **50.97%** | **49.87%** | **47.77%** | **97.96%** | **494** |
+| **5. XGBoost Model B w/o hops** (Ablation) | 0.9691 | 47.92% | 51.08% | 49.45% | 46.19% | 98.04% | 513 |
+| **6. XGBoost Model A + Prior Fraud Count** | 0.9901 | **49.48%** | **61.26%** | **54.74%** | **58.58%** | **98.53%** | 578 |
 
 ```
-Precision Comparison:
-Baseline Model:        [33.82%] █████████████
-Graph-Augmented Model: [97.20%] ███████████████████████████████████████ (+187.4%)
+Precision-Recall Area (PR-AUC) Comparison:
+1. Logistic Regression:              [11.93%] ████
+2. XGBoost Model A (Tx Only):        [43.77%] ██████████████
+3. XGBoost Model B w/o hops:         [46.19%] ███████████████
+4. XGBoost Model B (Tx + Graph):     [47.77%] ████████████████
+5. Random Forest Baseline:           [48.19%] ████████████████
+6. XGBoost Model A + Prior Fraud:    [58.58%] ████████████████████
 ```
 
-**Interpretation**: With transaction attributes alone, two out of every three alerts generated are false positives (33.8% precision). Adding graph adjacency intelligence raises precision to **97.20%**, meaning **97 out of every 100 alerts investigated by analysts are genuine fraud syndicate rings**.
+**Key Empirical Findings**:
+1. **Graph Lift over Transaction-Only**: Adding network features (Model B) improves precision from 44.13% to 48.81% and PR-AUC from 0.4377 to 0.4777 over raw transaction features alone, cutting false positive alarms by **24.2%** (from 652 down to 494).
+2. **Account History Outperforms Network Structure**: **Model A + Prior Fraud Count (Model 6) achieves PR-AUC 0.5858 and F1 0.5474, outperforming Model B (PR-AUC 0.4777)**. This honest ablation proves that while graph intelligence adds value over transaction attributes alone, direct prior account fraud history remains the strongest predictive signal.
+3. **Data Scope & Proxy Limitations**: This system is evaluated on public simulated data (the Sparkov 1.85M transaction dataset), not a deployable live banking system. The graph edges are a same-merchant 24-hour co-occurrence proxy rather than proprietary cross-institutional device or identity linkage.
 
 ---
 
 ### 6.5 Model Evaluation Metrics & The Operational Trade-Off
 
-The pre-trained model bundle recorded on the Manager Dashboard exhibits the following verified metrics on chronological held-out test data:
+The deployed production model bundle (`models/fraud_model.joblib`) exhibits the following verified metrics on the chronological held-out test split (277,860 transactions):
 
-1. **Precision: 97.20%**
-   $$\text{Precision} = \frac{\text{True Positives}}{\text{True Positives} + \text{False Positives}} = \frac{TP}{TP + FP}$$
-   *Operational Meaning*: When the model fires an alert, there is a **97.20% probability that the account is actively engaged in a fraud syndicate**. This virtually eliminates "alert fatigue," saving hundreds of wasted analyst investigation hours per week.
-2. **Recall: 11.98%**
-   $$\text{Recall} = \frac{\text{True Positives}}{\text{True Positives} + \text{False Negatives}} = \frac{TP}{TP + FN}$$
-   *Operational Engineering Trade-Off*: The model intentionally trades off broad opportunistic fraud detection in favor of ultra-high precision. Its primary mandate is discovering coordinated multi-hop syndicate rings with near-absolute certainty, rather than flagging petty, low-value card-present anomalies.
-3. **F1-Score: 21.34%**
-   The harmonic mean balancing precision and recall:
-   $$F_1 = 2 \cdot \frac{\text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}} = 2 \cdot \frac{0.9720 \cdot 0.1198}{0.9720 + 0.1198} \approx 0.2134$$
-4. **PR-AUC: 95.14% (Area Under Precision-Recall Curve)**
-   In severe class imbalance, ROC-AUC can present an overly optimistic score because of the overwhelming number of true negatives. **PR-AUC is the gold-standard metric for fraud detection**. Achieving **95.14% PR-AUC** confirms exceptional discrimination across all potential threshold operating points.
-5. **ROC-AUC: 98.04% (Area Under ROC Curve)**
-   Reflects a **98.04% probability** that a randomly chosen fraudulent transaction will receive a higher risk score than a randomly chosen legitimate transaction.
+1. **Precision: 48.81%**
+   $$\text{Precision} = \frac{\text{True Positives}}{\text{True Positives} + \text{False Positives}} = \frac{471}{471 + 494} \approx 0.4881$$
+   *Operational Meaning*: Nearly half of all elevated alerts are confirmed syndicated fraud attacks, avoiding false alert flooding in the security operations center.
+2. **Recall: 50.97%**
+   $$\text{Recall} = \frac{\text{True Positives}}{\text{True Positives} + \text{False Negatives}} = \frac{471}{471 + 453} \approx 0.5097$$
+   *Operational Meaning*: The model detects over 50% of all fraud attacks on held-out test data. Single-card cold-start fraud on isolated merchants without prior history accounts for remaining false negatives.
+3. **F1-Score: 49.87%**
+   $$F_1 = 2 \cdot \frac{0.4881 \cdot 0.5097}{0.4881 + 0.5097} \approx 0.4987$$
+4. **PR-AUC: 47.77% (Precision-Recall Area)**
+   Confirms consistent discriminative separation on heavily imbalanced financial data (0.33% test fraud rate).
+5. **ROC-AUC: 97.96%**
+   Reflects strong rank-ordering across positive and negative transaction distributions.
+6. **Decision Threshold: 0.9735**
+   Calibrated on the validation set to maximize F1-score and curb false positive alert volume. Medium risk begins at $0.5 \times \text{threshold} \approx 0.4868$.
 
 ---
 

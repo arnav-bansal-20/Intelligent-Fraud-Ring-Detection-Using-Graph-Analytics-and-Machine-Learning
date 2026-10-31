@@ -189,8 +189,8 @@ export default function ManagerDashboard() {
           <span className="badge badge-blue">Evaluated on Precision / Recall / PR-AUC</span>
         </div>
 
-        {/* 5 Headline Metrics */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '18px' }}>
+        {/* 6 Headline Metrics */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '18px' }}>
           <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 600 }}>Precision</span>
             <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#059669', margin: '4px 0' }}>
@@ -229,6 +229,14 @@ export default function ManagerDashboard() {
               {(metrics?.model_metrics?.roc_auc * 100).toFixed(2)}%
             </div>
             <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>High discrimination power</span>
+          </div>
+
+          <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 600 }}>Decision Threshold</span>
+            <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#475569', margin: '4px 0' }}>
+              {metrics?.model_metrics?.threshold ? metrics.model_metrics.threshold.toFixed(4) : '0.9735'}
+            </div>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Calibrated validation cut-off</span>
           </div>
         </div>
 

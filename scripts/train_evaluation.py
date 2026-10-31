@@ -634,11 +634,16 @@ def main():
         print(f"  {r['Model']:<35}: TP={r['TP']:<5} FP={r['FP']:<6} FN={r['FN']:<5} TN={r['TN']:<7}")
     print("="*125 + "\n")
     
+    # Dynamic calculation of false positive reduction between Model A and Model B
+    fp_a = results["Model A"]["confusion_matrix"]["fp"]
+    fp_b = results["Model B"]["confusion_matrix"]["fp"]
+    fp_reduction_pct = ((fp_a - fp_b) / fp_a) * 100.0 if fp_a > 0 else 0.0
+
     # 3 Plain-Language Sentences on Graph Lift
     print("SUMMARY FINDINGS:")
-    print("1. Network graph features dramatically elevate detection precision and PR-AUC over raw transaction baselines by exposing co-merchant syndicates and direct proximity to known compromised nodes.")
-    print("2. Ablating hops_to_flagged demonstrates that while an account's immediate prior fraud history provides the strongest point-in-time signal, network structural features (such as degree centrality and shared merchant velocity) independently sustain superior separation over transaction-only baselines.")
-    print("3. Graph analytics did not significantly improve recall at extreme high-recall thresholds (>= 90%) where isolated first-time single-card fraud occurs without prior network footprint, but it decisively curbed false positive alerts by over 80% at operational operating points.")
+    print("1. Network graph features elevate detection precision (from 0.4413 to 0.4881) and PR-AUC (from 0.4377 to 0.4777) over raw transaction baselines by exposing co-merchant syndicates.")
+    print("2. Ablating hops_to_flagged demonstrates that while an account's immediate prior fraud history provides the strongest point-in-time signal, network structural features independently sustain superior separation over transaction-only baselines.")
+    print(f"3. Graph analytics curbed false positive alerts by {fp_reduction_pct:.1f}% (from {fp_a} down to {fp_b} false alarms) compared to transaction-only Model A at the calibrated decision threshold.")
     print("="*125 + "\n")
 
 

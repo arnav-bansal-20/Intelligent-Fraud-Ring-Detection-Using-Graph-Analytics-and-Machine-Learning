@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from typing import List, Optional
 from backend.schemas import AlertListItem, AlertReviewRequest, AlertAuditItem
 from backend.auth import get_current_user, require_roles
-from backend.database import get_pg_connection
+from backend.database import get_db, refresh_fraud_accounts_cache
 
 router = APIRouter(prefix="/alerts", tags=["Alert Queue"])
 
@@ -12,6 +12,7 @@ def get_alerts(
     risk_label: Optional[str] = Query(None, pattern="^(Low|Medium|High)$"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    conn = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -19,7 +20,6 @@ def get_alerts(
     Supports filtering by status (open, reviewing, closed) and risk label.
     Parameterised queries only.
     """
-    conn = get_pg_connection()
     cur = conn.cursor()
 
     sql = """
@@ -61,7 +61,6 @@ def get_alerts(
     cur.execute(sql, tuple(params))
     rows = cur.fetchall()
     cur.close()
-    conn.close()
 
     return [
         AlertListItem(
@@ -85,9 +84,12 @@ def get_alerts(
     ]
 
 @router.get("/{alert_id}", response_model=AlertListItem)
-def get_alert_detail(alert_id: int, current_user: dict = Depends(get_current_user)):
+def get_alert_detail(
+    alert_id: int,
+    conn = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """Fetch detail for a single alert."""
-    conn = get_pg_connection()
     cur = conn.cursor()
 
     cur.execute("""
@@ -117,7 +119,6 @@ def get_alert_detail(alert_id: int, current_user: dict = Depends(get_current_use
     """, (alert_id,))
     r = cur.fetchone()
     cur.close()
-    conn.close()
 
     if not r:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -144,14 +145,14 @@ def get_alert_detail(alert_id: int, current_user: dict = Depends(get_current_use
 def review_alert(
     alert_id: int,
     body: AlertReviewRequest,
+    conn = Depends(get_db),
     current_user: dict = Depends(require_roles(["analyst", "manager", "admin"]))
 ):
     """
     Review an alert, record the analyst's decision and notes, and update status.
-    Uses parameterized SQL and logs an entry in audit_log.
-    The database trigger also maintains alert_audit.
+    State changes are automatically audited once by the database trigger (trg_alert_audit).
+    If closed as confirmed fraud, updates transaction.is_fraud and refreshes the fraud accounts cache.
     """
-    conn = get_pg_connection()
     cur = conn.cursor()
 
     # 1. Fetch current alert state
@@ -159,10 +160,9 @@ def review_alert(
     existing = cur.fetchone()
     if not existing:
         cur.close()
-        conn.close()
         raise HTTPException(status_code=404, detail="Alert not found")
 
-    # 2. Update alert in PostgreSQL
+    # 2. Update alert in PostgreSQL (Trigger automatically writes into alert_audit once)
     cur.execute("""
         UPDATE alert
         SET status = %s,
@@ -173,17 +173,28 @@ def review_alert(
         WHERE alert_id = %s;
     """, (body.status, body.decision, body.note, current_user["analyst_id"], alert_id))
 
-    # 3. Explicitly insert audit log entry
-    cur.execute("""
-        INSERT INTO audit_log (analyst_id, action, target_type, target_id, details)
-        VALUES (%s, %s, %s, %s, %s);
-    """, (
-        current_user["analyst_id"],
-        f"REVIEW_ALERT_{body.status.upper()}",
-        "alert",
-        alert_id,
-        f"Status changed from '{existing['status']}' to '{body.status}'. Decision: '{body.decision}'. Note: '{body.note}'"
-    ))
+    # 3. If closed as confirmed fraud, mark is_fraud = true on transaction and refresh cache
+    decision_lower = body.decision.lower() if body.decision else ""
+    is_confirmed_fraud = any(term in decision_lower for term in ["confirmed fraud", "takeover", "synthetic", "syndicate"]) and body.status == "closed"
+    is_false_positive = ("false positive" in decision_lower or "legitimate" in decision_lower) and body.status == "closed"
+
+    if is_confirmed_fraud:
+        cur.execute("""
+            UPDATE transaction
+            SET is_fraud = true
+            FROM alert
+            WHERE alert.alert_id = %s AND alert.transaction_id = transaction.transaction_id;
+        """, (alert_id,))
+        refresh_fraud_accounts_cache(cur)
+    elif is_false_positive:
+        cur.execute("""
+            UPDATE transaction
+            SET is_fraud = false
+            FROM alert
+            WHERE alert.alert_id = %s AND alert.transaction_id = transaction.transaction_id;
+        """, (alert_id,))
+        refresh_fraud_accounts_cache(cur)
+
     conn.commit()
 
     # 4. Fetch updated row
@@ -214,7 +225,6 @@ def review_alert(
     """, (alert_id,))
     r = cur.fetchone()
     cur.close()
-    conn.close()
 
     return AlertListItem(
         alert_id=r["alert_id"],
@@ -235,9 +245,12 @@ def review_alert(
     )
 
 @router.get("/{alert_id}/audit", response_model=List[AlertAuditItem])
-def get_alert_audit_history(alert_id: int, current_user: dict = Depends(get_current_user)):
+def get_alert_audit_history(
+    alert_id: int,
+    conn = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """Fetch audit history for an alert from PostgreSQL alert_audit table."""
-    conn = get_pg_connection()
     cur = conn.cursor()
 
     cur.execute("""
@@ -257,7 +270,6 @@ def get_alert_audit_history(alert_id: int, current_user: dict = Depends(get_curr
     """, (alert_id,))
     rows = cur.fetchall()
     cur.close()
-    conn.close()
 
     return [
         AlertAuditItem(

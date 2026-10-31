@@ -15,7 +15,13 @@ MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "fraud_ring_db")
 
 # Security & JWT
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "default-dev-secret-key-replace-in-production")
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not JWT_SECRET_KEY or len(JWT_SECRET_KEY.strip()) < 32:
+    raise RuntimeError(
+        "CRITICAL SECURITY CONFIGURATION ERROR: JWT_SECRET_KEY is missing or shorter than 32 characters. "
+        "Set a strong secret key (at least 32 characters) in .env before starting the server."
+    )
+JWT_SECRET_KEY = JWT_SECRET_KEY.strip()
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 120))
 

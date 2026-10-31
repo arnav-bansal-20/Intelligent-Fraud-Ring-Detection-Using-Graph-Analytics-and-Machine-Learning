@@ -9,7 +9,8 @@ from backend.schemas import (
     FeatureReason, SampleTransactionOption
 )
 from backend.auth import get_current_user
-from backend.database import get_pg_connection, get_mongo_db
+from backend.database import get_db, get_mongo_db, get_known_fraud_accounts
+from backend.features import compute_transaction_features
 from backend.config import MODEL_PATH
 
 router = APIRouter(prefix="/score", tags=["Transaction Scoring"])
@@ -28,16 +29,21 @@ def get_model():
 @router.post("", response_model=TransactionScoreResponse)
 def score_transaction(
     req: TransactionScoreRequest,
+    conn = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
     """
     Score a transaction using the trained XGBoost model and dynamic MongoDB graph features.
-    Computes graph features, predicts fraud probability, assigns risk label,
+    Computes graph features, predicts fraud probability, assigns risk label based on calibrated threshold,
     and returns feature contribution reasons for decision support.
     """
     bundle = get_model()
     model = bundle["model"]
     feature_cols = bundle["feature_cols"]
+
+    # Decision thresholds: calibrated threshold for High, 0.5 * threshold for Medium
+    high_threshold = float(bundle.get("threshold", 0.9735))
+    medium_threshold = round(high_threshold * 0.5, 4)
 
     # 1. Parse timestamp
     if req.txn_timestamp:
@@ -48,95 +54,48 @@ def score_transaction(
     else:
         dt = datetime.now(timezone.utc)
 
-    hour = dt.hour
-    day_of_week = dt.weekday()
-
-    # 2. Extract Graph Features from MongoDB & PostgreSQL
+    # 2. Extract Graph & Transaction Features using shared module
     mongo = get_mongo_db()
-    conn = get_pg_connection()
     cur = conn.cursor()
 
-    # Known fraud accounts from PostgreSQL (cached or query)
-    cur.execute("SELECT DISTINCT account_id FROM transaction WHERE is_fraud = true;")
-    fraud_accounts = set(r["account_id"] for r in cur.fetchall())
+    # Cached confirmed fraud accounts (built strictly from is_fraud = true)
+    fraud_accounts = get_known_fraud_accounts(cur)
 
-    # Get account graph document from MongoDB
-    acc_doc = mongo.account_graph.find_one({"account_id": req.account_id})
-    neighbors = acc_doc.get("neighbors", []) if acc_doc else []
-    degree = acc_doc.get("degree", len(neighbors)) if acc_doc else 0
-    degree_centrality = float(degree) / 999.0
-
-    # Prior fraud neighbors count
-    prior_fraud_neighbors_count = sum(1 for n in neighbors if n.get("account_id") in fraud_accounts)
-
-    # Shortest hops to flagged fraud account
-    if req.account_id in fraud_accounts:
-        hops_to_flagged = 0
-    elif prior_fraud_neighbors_count > 0:
-        hops_to_flagged = 1
-    else:
-        # Check 2-hop neighbors
-        neighbor_ids = [n.get("account_id") for n in neighbors[:50]]
-        two_hop_flagged = mongo.account_graph.count_documents({
-            "account_id": {"$in": neighbor_ids},
-            "neighbors.account_id": {"$in": list(fraud_accounts)}
-        })
-        hops_to_flagged = 2 if two_hop_flagged > 0 else 3
-
-    # Velocity features from PostgreSQL
-    iso_time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-    cur.execute("""
-        SELECT COUNT(*) as velocity
-        FROM transaction
-        WHERE account_id = %s
-          AND txn_timestamp BETWEEN (%s::timestamp - interval '24 hours') AND %s::timestamp;
-    """, (req.account_id, iso_time_str, iso_time_str))
-    vel_row = cur.fetchone()
-    trans_velocity_24h = vel_row["velocity"] if vel_row else 0
-
-    # Shared merchant count 24h
-    cur.execute("""
-        SELECT COUNT(DISTINCT account_id) as shared_cnt
-        FROM transaction
-        WHERE merchant_id = %s
-          AND txn_timestamp BETWEEN (%s::timestamp - interval '24 hours') AND %s::timestamp
-          AND account_id <> %s;
-    """, (req.merchant_id, iso_time_str, iso_time_str, req.account_id))
-    merch_row = cur.fetchone()
-    shared_merchant_count_24h = merch_row["shared_cnt"] if merch_row else 0
-
-    # 3. Build Feature Vector according to saved model schema:
-    # ['amount', 'hour', 'day_of_week', 'hops_to_flagged', 'degree_centrality',
-    #  'shared_merchant_count_24h', 'trans_velocity_24h', 'prior_fraud_neighbors_count']
-    feature_dict = {
-        "amount": float(req.amount),
-        "hour": int(hour),
-        "day_of_week": int(day_of_week),
-        "hops_to_flagged": float(hops_to_flagged),
-        "degree_centrality": float(degree_centrality),
-        "shared_merchant_count_24h": float(shared_merchant_count_24h),
-        "trans_velocity_24h": float(trans_velocity_24h),
-        "prior_fraud_neighbors_count": float(prior_fraud_neighbors_count)
-    }
+    feature_dict = compute_transaction_features(
+        account_id=req.account_id,
+        merchant_id=req.merchant_id,
+        amount=req.amount,
+        dt=dt,
+        cur=cur,
+        mongo=mongo,
+        fraud_accounts=fraud_accounts
+    )
 
     feature_vector = np.array([[feature_dict[col] for col in feature_cols]])
 
-    # 4. Model Inference
+    # 3. Model Inference
     pred_prob = float(model.predict_proba(feature_vector)[0, 1])
     fraud_probability = round(pred_prob, 4)
 
-    # Determine risk label
-    if fraud_probability >= 0.70:
+    # Calibrated Risk Label Assignment
+    if fraud_probability >= high_threshold:
         risk_label = "High"
-    elif fraud_probability >= 0.30:
+        predicted_fraud = True
+    elif fraud_probability >= medium_threshold:
         risk_label = "Medium"
+        predicted_fraud = False
     else:
         risk_label = "Low"
+        predicted_fraud = False
 
-    # 5. Compute Top Reasons (Explainability for Analyst Decision Support)
+    hops_to_flagged = feature_dict["hops_to_flagged"]
+    prior_fraud_neighbors_count = feature_dict["prior_fraud_neighbors_count"]
+    trans_velocity_24h = feature_dict["trans_velocity_24h"]
+
+    # 4. Compute Top Reasons (Explainability for Analyst Decision Support)
     top_reasons: List[FeatureReason] = []
 
-    # Reason 1: Network Proximity to Fraud (Strongest XGBoost predictor ~80.8% importance)
+    # Reason 1: Network Proximity to Fraud
     if hops_to_flagged == 0:
         top_reasons.append(FeatureReason(
             feature="hops_to_flagged",
@@ -154,75 +113,63 @@ def score_transaction(
     else:
         top_reasons.append(FeatureReason(
             feature="hops_to_flagged",
-            description=f"Account is {hops_to_flagged} hops removed from nearest flagged syndicate accounts.",
+            description=f"Account is {int(hops_to_flagged)} hops removed from nearest flagged syndicate accounts.",
             value=float(hops_to_flagged),
             contribution_level="Moderate" if hops_to_flagged <= 2 else "Baseline"
         ))
 
-    # Reason 2: Fraud Neighbors in Merchant Graph
-    if prior_fraud_neighbors_count > 50:
+    # Reason 2: Fraud Network Concentration
+    if prior_fraud_neighbors_count > 0:
         top_reasons.append(FeatureReason(
             feature="prior_fraud_neighbors_count",
-            description=f"Dense syndicate overlap: Account clusters with {prior_fraud_neighbors_count} confirmed fraudulent peers.",
+            description=f"Direct merchant network overlap with {int(prior_fraud_neighbors_count)} confirmed fraud accounts.",
             value=float(prior_fraud_neighbors_count),
             contribution_level="High"
-        ))
-    elif prior_fraud_neighbors_count > 0:
-        top_reasons.append(FeatureReason(
-            feature="prior_fraud_neighbors_count",
-            description=f"Account shares merchant transacting patterns with {prior_fraud_neighbors_count} fraudulent accounts.",
-            value=float(prior_fraud_neighbors_count),
-            contribution_level="Moderate"
         ))
 
     # Reason 3: Transaction Amount
     if req.amount > 500.0:
         top_reasons.append(FeatureReason(
             feature="amount",
-            description=f"Unusually high transaction amount (${req.amount:.2f}) vs normal median ($45).",
+            description=f"Elevated transaction value (${req.amount:.2f}) vs normal expected baseline.",
             value=float(req.amount),
-            contribution_level="High"
-        ))
-    elif req.amount > 200.0:
-        top_reasons.append(FeatureReason(
-            feature="amount",
-            description=f"Elevated transaction amount (${req.amount:.2f}).",
-            value=float(req.amount),
-            contribution_level="Moderate"
+            contribution_level="High" if req.amount > 1000.0 else "Moderate"
         ))
 
-    # Reason 4: Late-night hour anomaly
-    if hour in [0, 1, 2, 3, 4, 5]:
-        top_reasons.append(FeatureReason(
-            feature="hour",
-            description=f"Transaction initiated during high-risk night window ({hour:02d}:00).",
-            value=float(hour),
-            contribution_level="Moderate"
-        ))
-
-    # Reason 5: Velocity bursts
-    if trans_velocity_24h > 5:
+    # Reason 4: 24h Velocity Spike
+    if trans_velocity_24h >= 3:
         top_reasons.append(FeatureReason(
             feature="trans_velocity_24h",
-            description=f"High transaction velocity: {trans_velocity_24h} transactions in past 24 hours.",
+            description=f"High transaction frequency burst: {int(trans_velocity_24h)} transactions in past 24 hours.",
             value=float(trans_velocity_24h),
             contribution_level="High"
         ))
 
-    # 6. Save Alert if requested and risk is High
+    # Fallback Baseline
+    if not top_reasons:
+        top_reasons.append(FeatureReason(
+            feature="baseline",
+            description="Transaction characteristics align with standard commercial banking activity.",
+            value=float(fraud_probability),
+            contribution_level="Baseline"
+        ))
+
+    # 5. Save Alert if requested and risk is High
     alert_created = False
     alert_id = None
+    iso_time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+
     if req.save_alert and risk_label == "High":
-        # Create or fetch transaction row
+        # Create transaction row with source='company', predicted_fraud, fraud_probability, is_fraud=False
         cur.execute("""
-            INSERT INTO transaction (account_id, merchant_id, trans_num, amount, txn_timestamp, is_fraud)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO transaction (account_id, merchant_id, trans_num, amount, txn_timestamp, source, predicted_fraud, fraud_probability, is_fraud)
+            VALUES (%s, %s, %s, %s, %s, 'company', %s, %s, false)
             ON CONFLICT (trans_num) DO UPDATE SET amount = EXCLUDED.amount
             RETURNING transaction_id;
         """, (
             req.account_id, req.merchant_id,
             f"sim_{int(datetime.now().timestamp() * 1000)}",
-            req.amount, iso_time_str, False
+            req.amount, iso_time_str, predicted_fraud, fraud_probability
         ))
         tx_row = cur.fetchone()
         if tx_row:
@@ -244,7 +191,6 @@ def score_transaction(
                 conn.commit()
 
     cur.close()
-    conn.close()
 
     return TransactionScoreResponse(
         account_id=req.account_id,
@@ -260,12 +206,14 @@ def score_transaction(
     )
 
 @router.get("/sample-transactions", response_model=List[SampleTransactionOption])
-def get_sample_transactions(current_user: dict = Depends(get_current_user)):
+def get_sample_transactions(
+    conn = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """
     Returns a curated set of sample transactions from PostgreSQL
     for quick selection and decision-support testing by the analyst.
     """
-    conn = get_pg_connection()
     cur = conn.cursor()
 
     cur.execute("""
@@ -308,7 +256,6 @@ def get_sample_transactions(current_user: dict = Depends(get_current_user)):
     """)
     normal_samples = cur.fetchall()
     cur.close()
-    conn.close()
 
     combined = list(fraud_samples) + list(normal_samples)
     return [
@@ -325,4 +272,3 @@ def get_sample_transactions(current_user: dict = Depends(get_current_user)):
         )
         for r in combined
     ]
-

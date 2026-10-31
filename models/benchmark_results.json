@@ -1,0 +1,29 @@
+[
+  {
+    "hops": 1,
+    "discovered_nodes": 1.0,
+    "postgres_cte_latency_ms": 3.2,
+    "postgres_cte_p95_ms": 6.67,
+    "mongodb_graph_latency_ms": 0.47,
+    "mongodb_graph_p95_ms": 0.79,
+    "speedup": "6.8x"
+  },
+  {
+    "hops": 2,
+    "discovered_nodes": 2.0,
+    "postgres_cte_latency_ms": 4.26,
+    "postgres_cte_p95_ms": 6.19,
+    "mongodb_graph_latency_ms": 0.58,
+    "mongodb_graph_p95_ms": 0.84,
+    "speedup": "7.4x"
+  },
+  {
+    "hops": 3,
+    "discovered_nodes": 2.0,
+    "postgres_cte_latency_ms": 4.38,
+    "postgres_cte_p95_ms": 7.01,
+    "mongodb_graph_latency_ms": 0.8,
+    "mongodb_graph_p95_ms": 1.02,
+    "speedup": "5.5x"
+  }
+]

@@ -83,4 +83,6 @@ if os.path.exists(dist_dir):
 if __name__ == "__main__":
     import uvicorn
     from backend.config import PORT
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=PORT, reload=True)
+    host = os.getenv("HOST", "127.0.0.1")
+    reload = os.getenv("RELOAD", "false").lower() in ("true", "1")
+    uvicorn.run("backend.main:app", host=host, port=PORT, reload=reload)
