@@ -3,6 +3,7 @@ import joblib
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 
 from backend.config import CORS_ORIGIN, MODEL_PATH
 from backend.routers import (
@@ -10,7 +11,8 @@ from backend.routers import (
     scoring_router,
     alerts_router,
     rings_router,
-    dashboard_router
+    dashboard_router,
+    transactions_router
 )
 
 app = FastAPI(
@@ -51,6 +53,7 @@ def startup_event():
 
 # Include all API Routers
 app.include_router(auth_router.router, prefix="/api")
+app.include_router(transactions_router.router, prefix="/api")
 app.include_router(scoring_router.router, prefix="/api")
 app.include_router(alerts_router.router, prefix="/api")
 app.include_router(rings_router.router, prefix="/api")
@@ -67,6 +70,14 @@ def health_check():
 # Mount static build if present
 dist_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"))
 if os.path.exists(dist_dir):
+    @app.exception_handler(404)
+    async def custom_404_handler(request, exc):
+        if not request.url.path.startswith("/api/"):
+            index_file = os.path.join(dist_dir, "index.html")
+            if os.path.exists(index_file):
+                return FileResponse(index_file)
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
     app.mount("/", StaticFiles(directory=dist_dir, html=True), name="static")
 
 if __name__ == "__main__":

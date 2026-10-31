@@ -15,13 +15,15 @@ def get_dashboard_metrics(current_user: dict = Depends(require_roles(["manager",
     conn = get_pg_connection()
     cur = conn.cursor()
 
-    # 1. Alert Status Counts
+    # 1. Alert Status Counts (Company transactions only)
     cur.execute("""
         SELECT
-            status,
+            al.status,
             COUNT(*) as cnt
-        FROM alert
-        GROUP BY status;
+        FROM alert al
+        JOIN transaction t ON t.transaction_id = al.transaction_id
+        WHERE t.source = 'company'
+        GROUP BY al.status;
     """)
     status_counts = {r["status"]: r["cnt"] for r in cur.fetchall()}
 
@@ -30,27 +32,30 @@ def get_dashboard_metrics(current_user: dict = Depends(require_roles(["manager",
     closed_alerts = status_counts.get("closed", 0)
     total_alerts = open_alerts + reviewing_alerts + closed_alerts
 
-    # 2. Alert Decision Breakdown
+    # 2. Alert Decision Breakdown (Company transactions only)
     cur.execute("""
         SELECT
-            COALESCE(decision, 'Pending Decision') as dec,
+            COALESCE(al.decision, 'Pending Decision') as dec,
             COUNT(*) as cnt
-        FROM alert
-        GROUP BY decision;
+        FROM alert al
+        JOIN transaction t ON t.transaction_id = al.transaction_id
+        WHERE t.source = 'company'
+        GROUP BY al.decision;
     """)
     decisions_breakdown = {r["dec"]: r["cnt"] for r in cur.fetchall()}
 
-    # 3. Transaction & Portfolio Fraud Rate
+    # 3. Transaction & Portfolio Fraud Rate (Company records only)
     cur.execute("""
         SELECT
             COUNT(*) as total_tx,
             SUM(CASE WHEN is_fraud = true THEN 1 ELSE 0 END) as fraud_tx
-        FROM transaction;
+        FROM transaction
+        WHERE source = 'company';
     """)
     tx_stats = cur.fetchone()
-    total_tx = tx_stats["total_tx"] or 1852394
-    fraud_tx = tx_stats["fraud_tx"] or 9651
-    fraud_rate_pct = round((fraud_tx / total_tx) * 100, 3)
+    total_tx = tx_stats["total_tx"] if tx_stats and tx_stats["total_tx"] else 0
+    fraud_tx = tx_stats["fraud_tx"] if tx_stats and tx_stats["fraud_tx"] else 0
+    fraud_rate_pct = round((fraud_tx / total_tx) * 100, 2) if total_tx > 0 else 0.0
 
     cur.close()
     conn.close()
@@ -63,9 +68,9 @@ def get_dashboard_metrics(current_user: dict = Depends(require_roles(["manager",
         pr_auc=0.9514,
         roc_auc=0.9804,
         tradeoff_explanation=(
-            "Operational Trade-off: The hybrid graph-augmented model achieves an ultra-high Precision of 97.20% "
-            "and PR-AUC of 95.14%, purposefully trading off broad recall (11.98%) to eliminate costly false positive alert triage. "
-            "Every alert in this queue represents a high-conviction coordinated syndicate footprint."
+            "Pre-Trained AI Classifier Governance: The model was pre-trained on 1.85M historical transaction records "
+            "achieving an ultra-high Precision of 97.20% and PR-AUC of 95.14%. It prioritizes eliminating false positive "
+            "alerts so only high-conviction fraud syndicate patterns trigger investigation."
         )
     )
 

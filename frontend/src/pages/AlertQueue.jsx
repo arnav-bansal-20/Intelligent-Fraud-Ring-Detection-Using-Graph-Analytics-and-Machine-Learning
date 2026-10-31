@@ -1,49 +1,51 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import {
   BellRing,
-  Search,
   Filter,
   CheckCircle2,
   AlertTriangle,
   Clock,
-  Network,
-  History,
-  X,
-  Send,
-  UserCheck
+  User,
+  ArrowRight,
+  ShieldAlert,
+  Search,
+  ExternalLink,
+  ChevronRight
 } from 'lucide-react';
 
 export default function AlertQueue() {
   const [alerts, setAlerts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [statusFilter, setStatusFilter] = useState('open');
   const [searchTerm, setSearchTerm] = useState('');
+
+  // Selected alert for investigation drawer
   const [selectedAlert, setSelectedAlert] = useState(null);
   const [auditLogs, setAuditLogs] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  // Review form state
-  const [reviewStatus, setReviewStatus] = useState('reviewing');
-  const [decision, setDecision] = useState('Confirmed Fraud Syndicate');
-  const [note, setNote] = useState('');
+  const [reviewForm, setReviewForm] = useState({
+    status: 'closed',
+    decision: 'Confirmed Fraud Syndicate',
+    note: ''
+  });
   const [submitting, setSubmitting] = useState(false);
-  const [activeTab, setActiveTab] = useState('review'); // 'review' | 'audit'
-
-  const navigate = useNavigate();
 
   const fetchAlerts = async () => {
+    setLoading(true);
+    setError('');
     try {
-      setLoading(true);
       const params = {};
-      if (statusFilter !== 'ALL') params.status = statusFilter;
+      if (statusFilter && statusFilter !== 'ALL') {
+        params.status = statusFilter;
+      }
       const data = await api.getAlerts(params);
       setAlerts(data);
       if (data.length > 0 && !selectedAlert) {
         selectAlert(data[0]);
       }
     } catch (err) {
-      console.error('Failed to load alerts:', err);
+      setError(err.message || 'Failed to fetch alert queue');
     } finally {
       setLoading(false);
     }
@@ -55,38 +57,31 @@ export default function AlertQueue() {
 
   const selectAlert = async (alertItem) => {
     setSelectedAlert(alertItem);
-    setReviewStatus(alertItem.status);
-    setDecision(alertItem.decision || 'Confirmed Fraud Syndicate');
-    setNote(alertItem.note || '');
-    setActiveTab('review');
+    setReviewForm({
+      status: alertItem.status === 'open' ? 'reviewing' : alertItem.status,
+      decision: alertItem.decision || 'Confirmed Fraud Syndicate',
+      note: alertItem.note || ''
+    });
 
-    // Load audit trail
     try {
-      const logs = await api.getAlertAudit(alertItem.alert_id);
-      setAuditLogs(logs);
+      const audit = await api.getAlertAudit(alertItem.alert_id);
+      setAuditLogs(audit);
     } catch (err) {
-      console.error('Failed to load audit trail:', err);
+      console.error('Failed to load audit history:', err);
     }
   };
 
-  const handleSubmitReview = async (e) => {
+  const handleReviewSubmit = async (e) => {
     e.preventDefault();
     if (!selectedAlert) return;
     setSubmitting(true);
 
     try {
-      const updated = await api.reviewAlert(selectedAlert.alert_id, {
-        status: reviewStatus,
-        decision,
-        note
-      });
-      // Update local alerts list
-      setAlerts(prev => prev.map(a => a.alert_id === updated.alert_id ? updated : a));
+      const updated = await api.reviewAlert(selectedAlert.alert_id, reviewForm);
       setSelectedAlert(updated);
-
-      // Refresh audit
-      const logs = await api.getAlertAudit(updated.alert_id);
-      setAuditLogs(logs);
+      setAlerts(prev => prev.map(a => a.alert_id === updated.alert_id ? updated : a));
+      const audit = await api.getAlertAudit(selectedAlert.alert_id);
+      setAuditLogs(audit);
       alert('Alert decision & audit trail recorded successfully!');
     } catch (err) {
       alert('Failed to save review: ' + err.message);
@@ -110,8 +105,8 @@ export default function AlertQueue() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '16px' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 800, color: '#fff', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <BellRing size={24} color="#f87171" />
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <BellRing size={24} color="#dc2626" />
             Fraud Investigation Alert Queue
           </h1>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '4px' }}>
@@ -121,18 +116,18 @@ export default function AlertQueue() {
 
         {/* Filter Bar */}
         <div style={{ display: 'flex', gap: '12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '6px 12px', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '6px 12px', gap: '8px', boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.03)' }}>
             <Search size={16} color="var(--text-dim)" />
             <input
               type="text"
               placeholder="Search alert, customer, merchant..."
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
-              style={{ background: 'transparent', border: 'none', color: '#fff', fontSize: '0.82rem', outline: 'none', width: '220px' }}
+              style={{ background: 'transparent', border: 'none', color: 'var(--text-main)', fontSize: '0.82rem', outline: 'none', width: '220px' }}
             />
           </div>
 
-          <div style={{ display: 'flex', background: 'var(--bg-secondary)', borderRadius: '8px', border: '1px solid var(--border-color)', padding: '2px' }}>
+          <div style={{ display: 'flex', background: '#ffffff', borderRadius: '8px', border: '1px solid var(--border-color)', padding: '2px', boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.03)' }}>
             {['open', 'reviewing', 'closed', 'ALL'].map((st) => (
               <button
                 key={st}
@@ -143,9 +138,10 @@ export default function AlertQueue() {
                   fontSize: '0.78rem',
                   fontWeight: 600,
                   textTransform: 'uppercase',
-                  color: statusFilter === st ? '#fff' : 'var(--text-muted)',
-                  background: statusFilter === st ? '#3b82f6' : 'transparent',
-                  cursor: 'pointer'
+                  letterSpacing: '0.04em',
+                  color: statusFilter === st ? '#ffffff' : 'var(--text-muted)',
+                  background: statusFilter === st ? '#2563eb' : 'transparent',
+                  transition: 'all 0.15s ease'
                 }}
               >
                 {st}
@@ -155,19 +151,25 @@ export default function AlertQueue() {
         </div>
       </div>
 
-      {/* Main Grid: Alert List + Review Drawer */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 480px', gap: '24px', alignItems: 'flex-start' }}>
+      {error && (
+        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', padding: '12px', borderRadius: '8px', marginBottom: '20px' }}>
+          {error}
+        </div>
+      )}
+
+      {/* Main Grid: Queue Table & Inspector Drawer */}
+      <div style={{ display: 'grid', gridTemplateColumns: selectedAlert ? '1fr 480px' : '1fr', gap: '24px' }}>
         {/* Alerts Table */}
         <div className="card" style={{ padding: '0px', overflow: 'hidden' }}>
-          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Showing {filtered.length} Prioritized Alerts</span>
+          <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#ffffff' }}>
+            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)' }}>Showing {filtered.length} Prioritized Alerts</span>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Sorted by Risk Probability</span>
           </div>
 
           <div style={{ overflowX: 'auto', maxHeight: '720px' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', textAlign: 'left' }}>
               <thead>
-                <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', background: 'rgba(0,0,0,0.1)' }}>
+                <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)', background: '#f8fafc' }}>
                   <th style={{ padding: '12px' }}>Alert #</th>
                   <th style={{ padding: '12px' }}>Customer / Acc</th>
                   <th style={{ padding: '12px' }}>Merchant</th>
@@ -177,48 +179,66 @@ export default function AlertQueue() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((al) => {
-                  const isSelected = selectedAlert?.alert_id === al.alert_id;
-                  const probPct = Math.round(al.fraud_probability * 100);
+                {filtered.length === 0 ? (
+                  <tr>
+                    <td colSpan="6" style={{ textAlign: 'center', padding: '48px 20px', color: 'var(--text-muted)' }}>
+                      <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '6px' }}>No Active Company Alerts</div>
+                      <div style={{ fontSize: '0.8rem', maxWidth: '380px', margin: '0 auto 16px' }}>
+                        Alerts are dynamically generated when company transactions are evaluated as High Risk (probability ≥ 70%).
+                      </div>
+                      <a
+                        href="/score"
+                        className="btn btn-primary"
+                        style={{ display: 'inline-block', padding: '8px 16px', fontSize: '0.82rem', textDecoration: 'none' }}
+                      >
+                        Add & Analyze Company Transactions
+                      </a>
+                    </td>
+                  </tr>
+                ) : (
+                  filtered.map((al) => {
+                    const isSelected = selectedAlert?.alert_id === al.alert_id;
+                    const probPct = Math.round(al.fraud_probability * 100);
 
-                  return (
-                    <tr
-                      key={al.alert_id}
-                      onClick={() => selectAlert(al)}
-                      style={{
-                        borderBottom: '1px solid var(--border-color)',
-                        background: isSelected ? 'rgba(59, 130, 246, 0.12)' : 'transparent',
-                        cursor: 'pointer',
-                        transition: 'background 0.15s ease'
-                      }}
-                    >
-                      <td style={{ padding: '12px' }} className="mono">
-                        <strong style={{ color: '#fff' }}>AL-{al.alert_id}</strong>
-                      </td>
-                      <td style={{ padding: '12px' }}>
-                        <div style={{ fontWeight: 600, color: '#fff' }}>{al.customer_name}</div>
-                        <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>Acc #{al.account_id}</div>
-                      </td>
-                      <td style={{ padding: '12px' }}>
-                        <div style={{ color: 'var(--text-main)' }}>{al.merchant_name}</div>
-                        <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>{al.txn_timestamp?.split(' ')[0]}</div>
-                      </td>
-                      <td style={{ padding: '12px', fontWeight: 600 }}>
-                        ${al.amount.toFixed(2)}
-                      </td>
-                      <td style={{ padding: '12px' }}>
-                        <span className={`badge ${probPct >= 70 ? 'badge-danger' : probPct >= 30 ? 'badge-warning' : 'badge-success'}`}>
-                          {probPct}% ({al.risk_label})
-                        </span>
-                      </td>
-                      <td style={{ padding: '12px' }}>
-                        <span className={`badge ${al.status === 'open' ? 'badge-danger' : al.status === 'reviewing' ? 'badge-purple' : 'badge-success'}`} style={{ textTransform: 'uppercase' }}>
-                          {al.status}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
+                    return (
+                      <tr
+                        key={al.alert_id}
+                        onClick={() => selectAlert(al)}
+                        style={{
+                          borderBottom: '1px solid var(--border-color)',
+                          background: isSelected ? '#eff6ff' : 'transparent',
+                          cursor: 'pointer',
+                          transition: 'background 0.15s ease'
+                        }}
+                      >
+                        <td style={{ padding: '12px' }} className="mono">
+                          <strong style={{ color: 'var(--text-main)' }}>AL-{al.alert_id}</strong>
+                        </td>
+                        <td style={{ padding: '12px' }}>
+                          <div style={{ fontWeight: 600, color: 'var(--text-main)' }}>{al.customer_name}</div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>Acc #{al.account_id}</div>
+                        </td>
+                        <td style={{ padding: '12px' }}>
+                          <div style={{ color: 'var(--text-main)' }}>{al.merchant_name}</div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>{al.txn_timestamp?.split(' ')[0]}</div>
+                        </td>
+                        <td style={{ padding: '12px', fontWeight: 600, color: 'var(--text-main)' }}>
+                          ${al.amount.toFixed(2)}
+                        </td>
+                        <td style={{ padding: '12px' }}>
+                          <span className={`badge ${probPct >= 70 ? 'badge-danger' : probPct >= 30 ? 'badge-warning' : 'badge-success'}`}>
+                            {probPct}% ({al.risk_label})
+                          </span>
+                        </td>
+                        <td style={{ padding: '12px' }}>
+                          <span className={`badge ${al.status === 'open' ? 'badge-danger' : al.status === 'reviewing' ? 'badge-purple' : 'badge-success'}`} style={{ textTransform: 'uppercase' }}>
+                            {al.status}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -226,183 +246,160 @@ export default function AlertQueue() {
 
         {/* Selected Alert Decision Drawer */}
         {selectedAlert ? (
-          <div className="card" style={{ padding: '24px', position: 'sticky', top: '80px' }}>
+          <div className="card" style={{ padding: '24px', position: 'sticky', top: '80px', height: 'fit-content' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
               <div>
-                <span className="mono" style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>ALERT INSPECTION</span>
-                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#fff' }}>
-                  Alert #{selectedAlert.alert_id} • Acc #{selectedAlert.account_id}
+                <span className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Alert #{selectedAlert.alert_id}</span>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                  Decision Support Review
                 </h3>
               </div>
-              <button
-                onClick={() => navigate(`/rings?account=${selectedAlert.account_id}`)}
-                className="badge badge-purple"
-                style={{ padding: '6px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}
-                title="View Connected Accounts"
-              >
-                <Network size={14} />
-                Explore Ring
-              </button>
+              <span className={`badge ${selectedAlert.risk_label === 'High' ? 'badge-danger' : 'badge-warning'}`}>
+                {Math.round(selectedAlert.fraud_probability * 100)}% Risk
+              </span>
             </div>
 
-            {/* Quick Metadata Box */}
-            <div style={{ background: 'var(--bg-primary)', padding: '14px', borderRadius: '8px', border: '1px solid var(--border-color)', marginBottom: '16px', fontSize: '0.8rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            {/* Quick Summary Card */}
+            <div style={{ background: '#f8fafc', padding: '14px', borderRadius: '8px', border: '1px solid var(--border-color)', marginBottom: '16px', fontSize: '0.8rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
               <div>
-                <span style={{ color: 'var(--text-dim)', display: 'block' }}>Customer:</span>
-                <strong style={{ color: '#fff' }}>{selectedAlert.customer_name}</strong>
+                <span style={{ color: 'var(--text-dim)', display: 'block', fontSize: '0.72rem' }}>CUSTOMER</span>
+                <strong style={{ color: 'var(--text-main)' }}>{selectedAlert.customer_name}</strong>
               </div>
               <div>
-                <span style={{ color: 'var(--text-dim)', display: 'block' }}>Amount:</span>
-                <strong style={{ color: '#f87171', fontSize: '0.95rem' }}>${selectedAlert.amount.toFixed(2)}</strong>
+                <span style={{ color: 'var(--text-dim)', display: 'block', fontSize: '0.72rem' }}>ACCOUNT ID</span>
+                <span className="mono" style={{ fontWeight: 600 }}>#{selectedAlert.account_id}</span>
               </div>
               <div>
-                <span style={{ color: 'var(--text-dim)', display: 'block' }}>Merchant:</span>
-                <span style={{ color: '#cbd5e1' }}>{selectedAlert.merchant_name}</span>
+                <span style={{ color: 'var(--text-dim)', display: 'block', fontSize: '0.72rem' }}>MERCHANT</span>
+                <span>{selectedAlert.merchant_name}</span>
               </div>
               <div>
-                <span style={{ color: 'var(--text-dim)', display: 'block' }}>Fraud Probability:</span>
-                <strong style={{ color: '#f87171' }}>{(selectedAlert.fraud_probability * 100).toFixed(1)}%</strong>
+                <span style={{ color: 'var(--text-dim)', display: 'block', fontSize: '0.72rem' }}>TRANSACTION AMT</span>
+                <strong style={{ color: '#dc2626' }}>${selectedAlert.amount.toFixed(2)}</strong>
               </div>
             </div>
 
-            {/* Tabs: Decision Form / Audit Trail */}
-            <div style={{ display: 'flex', gap: '10px', borderBottom: '1px solid var(--border-color)', marginBottom: '16px' }}>
-              <button
-                onClick={() => setActiveTab('review')}
+            {/* 1-Click Ring Inspection Link */}
+            <div style={{ marginBottom: '18px' }}>
+              <a
+                href={`/rings?account=${selectedAlert.account_id}`}
                 style={{
-                  padding: '8px 12px',
-                  fontSize: '0.82rem',
-                  fontWeight: 600,
-                  color: activeTab === 'review' ? '#3b82f6' : 'var(--text-muted)',
-                  borderBottom: activeTab === 'review' ? '2px solid #3b82f6' : 'none',
-                  background: 'none'
-                }}
-              >
-                Analyst Determination
-              </button>
-              <button
-                onClick={() => setActiveTab('audit')}
-                style={{
-                  padding: '8px 12px',
-                  fontSize: '0.82rem',
-                  fontWeight: 600,
-                  color: activeTab === 'audit' ? '#3b82f6' : 'var(--text-muted)',
-                  borderBottom: activeTab === 'audit' ? '2px solid #3b82f6' : 'none',
-                  background: 'none',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '6px'
+                  justifyContent: 'space-between',
+                  padding: '10px 14px',
+                  background: '#f5f3ff',
+                  border: '1px solid #ddd6fe',
+                  borderRadius: '8px',
+                  color: '#6d28d9',
+                  textDecoration: 'none',
+                  fontSize: '0.82rem',
+                  fontWeight: 600
                 }}
               >
-                <History size={14} />
-                Audit Trail ({auditLogs.length})
-              </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <ShieldAlert size={16} />
+                  <span>Inspect Account Syndicate Ring (Cytoscape)</span>
+                </div>
+                <ChevronRight size={16} />
+              </a>
             </div>
 
-            {activeTab === 'review' ? (
-              <form onSubmit={handleSubmitReview} style={{ display: 'flex', flexDirection: 'column', gap: '14px', fontSize: '0.82rem' }}>
-                <div>
-                  <label style={{ display: 'block', color: 'var(--text-muted)', marginBottom: '4px' }}>Review Status</label>
-                  <select
-                    value={reviewStatus}
-                    onChange={e => setReviewStatus(e.target.value)}
-                    style={{ width: '100%', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '8px 10px', color: '#fff' }}
-                  >
-                    <option value="open">OPEN (Pending Review)</option>
-                    <option value="reviewing">REVIEWING (Under Active Investigation)</option>
-                    <option value="closed">CLOSED (Determination Finalized)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', color: 'var(--text-muted)', marginBottom: '4px' }}>Fraud Determination</label>
-                  <select
-                    value={decision}
-                    onChange={e => setDecision(e.target.value)}
-                    style={{ width: '100%', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '8px 10px', color: '#fff' }}
-                  >
-                    <option value="Confirmed Fraud Syndicate">Confirmed Fraud Syndicate</option>
-                    <option value="Account Takeover (ATO)">Account Takeover (ATO)</option>
-                    <option value="False Positive - Legitimate Spender">False Positive - Legitimate Spender</option>
-                    <option value="Escalated for Merchant Investigation">Escalated for Merchant Investigation</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', color: 'var(--text-muted)', marginBottom: '4px' }}>Analyst Investigation Notes</label>
-                  <textarea
-                    rows={4}
-                    value={note}
-                    onChange={e => setNote(e.target.value)}
-                    placeholder="Document supporting evidence from multi-hop merchant graph, velocity anomaly, or customer corroboration..."
-                    style={{ width: '100%', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '10px', color: '#fff', resize: 'vertical' }}
-                    required
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  style={{
-                    background: '#3b82f6',
-                    color: '#fff',
-                    padding: '10px',
-                    borderRadius: '8px',
-                    fontWeight: 600,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '8px',
-                    cursor: submitting ? 'not-allowed' : 'pointer'
-                  }}
+            {/* Determination & Decision Form */}
+            <form onSubmit={handleReviewSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                  Review Status
+                </label>
+                <select
+                  value={reviewForm.status}
+                  onChange={e => setReviewForm({ ...reviewForm, status: e.target.value })}
+                  style={{ width: '100%', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '8px 10px', color: 'var(--text-main)' }}
                 >
-                  <Send size={15} />
-                  {submitting ? 'Recording Audit Trail...' : 'Record Decision & Audit Log'}
-                </button>
-              </form>
-            ) : (
-              <div style={{ maxHeight: '350px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {auditLogs.length === 0 ? (
-                  <div style={{ textAlign: 'center', color: 'var(--text-dim)', padding: '20px', fontSize: '0.8rem' }}>
-                    No prior changes recorded. Alert is at initial ingestion state.
-                  </div>
-                ) : (
-                  auditLogs.map((log) => (
+                  <option value="open">Open (Keep in queue)</option>
+                  <option value="reviewing">In Review (Investigating)</option>
+                  <option value="closed">Closed (Resolution Recorded)</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                  Analyst Fraud Determination
+                </label>
+                <select
+                  value={reviewForm.decision}
+                  onChange={e => setReviewForm({ ...reviewForm, decision: e.target.value })}
+                  style={{ width: '100%', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '8px 10px', color: 'var(--text-main)' }}
+                >
+                  <option value="Confirmed Fraud Syndicate">Confirmed Fraud Syndicate</option>
+                  <option value="Account Takeover (ATO)">Account Takeover (ATO)</option>
+                  <option value="Synthetic Identity Ring">Synthetic Identity Ring</option>
+                  <option value="False Positive (Legitimate)">False Positive (Legitimate)</option>
+                  <option value="Escalated to Compliance / SAR">Escalated to Compliance / SAR</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                  Investigation Notes / Audit Trail
+                </label>
+                <textarea
+                  rows={3}
+                  value={reviewForm.note}
+                  onChange={e => setReviewForm({ ...reviewForm, note: e.target.value })}
+                  placeholder="Record justification and network findings..."
+                  style={{ width: '100%', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '10px', color: 'var(--text-main)', resize: 'vertical' }}
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={submitting}
+                className="btn btn-primary"
+                style={{
+                  padding: '10px',
+                  fontWeight: 600,
+                  fontSize: '0.85rem'
+                }}
+              >
+                {submitting ? 'Recording Audit...' : 'Save Decision & Update Audit Trail'}
+              </button>
+            </form>
+
+            {/* Audit Trail History */}
+            {auditLogs.length > 0 && (
+              <div style={{ marginTop: '20px', borderTop: '1px solid var(--border-color)', paddingTop: '14px' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600, textTransform: 'uppercase' }}>
+                  Historical State Transitions (Trigger-Audited)
+                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px', maxHeight: '180px', overflowY: 'auto' }}>
+                  {auditLogs.map((log) => (
                     <div
                       key={log.audit_id}
                       style={{
-                        background: 'var(--bg-primary)',
-                        border: '1px solid var(--border-color)',
+                        background: '#f8fafc',
+                        padding: '8px 12px',
                         borderRadius: '6px',
-                        padding: '10px 12px',
-                        fontSize: '0.76rem'
+                        border: '1px solid var(--border-color)',
+                        fontSize: '0.72rem'
                       }}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', color: 'var(--text-dim)' }}>
-                        <span style={{ fontWeight: 600, color: '#fff' }}>{log.changed_by_name || 'System Analyst'}</span>
-                        <span className="mono">{log.changed_at?.split('.')[0]}</span>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-dim)' }}>
+                        <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>{log.changed_by_name || 'System Analyst'}</span>
+                        <span>{log.changed_at?.slice(0, 19).replace('T', ' ')}</span>
                       </div>
-                      <div>
-                        Status: <strong style={{ color: '#cbd5e1' }}>{log.old_status || 'initial'}</strong> → <strong style={{ color: '#3b82f6' }}>{log.new_status}</strong>
+                      <div style={{ color: 'var(--text-muted)', marginTop: '2px' }}>
+                        Transition: {log.old_status} → <strong>{log.new_status}</strong> ({log.new_decision || 'Pending'})
                       </div>
-                      {log.new_decision && (
-                        <div style={{ marginTop: '2px', color: '#94a3b8' }}>
-                          Decision: <em>"{log.new_decision}"</em>
-                        </div>
-                      )}
                     </div>
-                  ))
-                )}
+                  ))}
+                </div>
               </div>
             )}
           </div>
-        ) : (
-          <div className="card" style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
-            Select an alert to inspect details and record decisions.
-          </div>
-        )}
+        ) : null}
       </div>
     </div>
   );
 }
-

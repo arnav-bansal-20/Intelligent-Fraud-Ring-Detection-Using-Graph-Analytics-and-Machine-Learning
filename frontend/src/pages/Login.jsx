@@ -41,26 +41,26 @@ export default function Login() {
       alignItems: 'center',
       justifyContent: 'center',
       padding: '24px',
-      background: 'radial-gradient(ellipse at 50% 20%, #162038 0%, #0a0f1d 70%)'
+      background: 'linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%)'
     }}>
-      <div className="card glow-red" style={{ width: '100%', maxWidth: '440px', padding: '36px' }}>
+      <div className="card" style={{ width: '100%', maxWidth: '440px', padding: '36px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.05)' }}>
         {/* Header */}
         <div style={{ textAlign: 'center', marginBottom: '28px' }}>
           <div style={{
             width: '56px',
             height: '56px',
             borderRadius: '16px',
-            background: 'rgba(239, 68, 68, 0.15)',
-            border: '1px solid rgba(239, 68, 68, 0.3)',
+            background: 'rgba(220, 38, 38, 0.1)',
+            border: '1px solid rgba(220, 38, 38, 0.25)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             margin: '0 auto 16px auto',
-            color: '#f87171'
+            color: '#dc2626'
           }}>
             <ShieldCheck size={32} />
           </div>
-          <h1 style={{ fontSize: '1.45rem', fontWeight: 800, color: '#fff', letterSpacing: '-0.02em' }}>
+          <h1 style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--text-main)', letterSpacing: '-0.02em' }}>
             FraudShield Portal
           </h1>
           <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '4px' }}>
@@ -70,9 +70,9 @@ export default function Login() {
 
         {error && (
           <div style={{
-            background: 'rgba(239, 68, 68, 0.15)',
-            border: '1px solid rgba(239, 68, 68, 0.3)',
-            color: '#fca5a5',
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            color: '#b91c1c',
             padding: '10px 14px',
             borderRadius: '8px',
             fontSize: '0.82rem',
@@ -95,7 +95,7 @@ export default function Login() {
             <div style={{
               display: 'flex',
               alignItems: 'center',
-              background: 'var(--bg-primary)',
+              background: '#f8fafc',
               border: '1px solid var(--border-color)',
               borderRadius: '8px',
               padding: '10px 14px',
@@ -106,7 +106,7 @@ export default function Login() {
                 type="text"
                 value={username}
                 onChange={e => setUsername(e.target.value)}
-                style={{ background: 'transparent', border: 'none', color: '#fff', width: '100%', outline: 'none', fontSize: '0.9rem' }}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-main)', width: '100%', outline: 'none', fontSize: '0.9rem' }}
                 placeholder="Username"
                 required
               />
@@ -120,7 +120,7 @@ export default function Login() {
             <div style={{
               display: 'flex',
               alignItems: 'center',
-              background: 'var(--bg-primary)',
+              background: '#f8fafc',
               border: '1px solid var(--border-color)',
               borderRadius: '8px',
               padding: '10px 14px',
@@ -131,7 +131,7 @@ export default function Login() {
                 type="password"
                 value={password}
                 onChange={e => setPassword(e.target.value)}
-                style={{ background: 'transparent', border: 'none', color: '#fff', width: '100%', outline: 'none', fontSize: '0.9rem' }}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-main)', width: '100%', outline: 'none', fontSize: '0.9rem' }}
                 placeholder="Password"
                 required
               />
@@ -143,8 +143,8 @@ export default function Login() {
             disabled={loading}
             style={{
               marginTop: '8px',
-              background: '#3b82f6',
-              color: '#fff',
+              background: '#2563eb',
+              color: '#ffffff',
               padding: '12px',
               borderRadius: '8px',
               fontWeight: 600,
@@ -153,7 +153,7 @@ export default function Login() {
               alignItems: 'center',
               justifyContent: 'center',
               gap: '8px',
-              boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)',
+              boxShadow: '0 4px 12px rgba(37, 99, 235, 0.25)',
               cursor: loading ? 'not-allowed' : 'pointer'
             }}
           >
@@ -164,7 +164,7 @@ export default function Login() {
         {/* Quick Demo Credentials */}
         <div style={{ marginTop: '28px', borderTop: '1px solid var(--border-color)', paddingTop: '18px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.74rem', color: 'var(--text-dim)', marginBottom: '10px' }}>
-            <Sparkles size={14} color="#f59e0b" />
+            <Sparkles size={14} color="#d97706" />
             <span>Select Demo Role (Password: <code className="mono">password123</code>):</span>
           </div>
 
@@ -176,10 +176,10 @@ export default function Login() {
               style={{
                 padding: '8px',
                 textAlign: 'center',
-                background: username === 'analyst' ? 'rgba(59, 130, 246, 0.2)' : 'var(--bg-primary)',
-                border: username === 'analyst' ? '1px solid #3b82f6' : '1px solid var(--border-color)',
+                background: username === 'analyst' ? '#eff6ff' : '#f8fafc',
+                border: username === 'analyst' ? '1px solid #2563eb' : '1px solid var(--border-color)',
                 fontSize: '0.75rem',
-                color: '#fff'
+                color: 'var(--text-main)'
               }}
             >
               <div style={{ fontWeight: 600 }}>analyst</div>
@@ -193,10 +193,10 @@ export default function Login() {
               style={{
                 padding: '8px',
                 textAlign: 'center',
-                background: username === 'manager' ? 'rgba(139, 92, 246, 0.2)' : 'var(--bg-primary)',
-                border: username === 'manager' ? '1px solid #8b5cf6' : '1px solid var(--border-color)',
+                background: username === 'manager' ? '#f5f3ff' : '#f8fafc',
+                border: username === 'manager' ? '1px solid #7c3aed' : '1px solid var(--border-color)',
                 fontSize: '0.75rem',
-                color: '#fff'
+                color: 'var(--text-main)'
               }}
             >
               <div style={{ fontWeight: 600 }}>manager</div>
@@ -210,10 +210,10 @@ export default function Login() {
               style={{
                 padding: '8px',
                 textAlign: 'center',
-                background: username === 'admin' ? 'rgba(239, 68, 68, 0.2)' : 'var(--bg-primary)',
-                border: username === 'admin' ? '1px solid #ef4444' : '1px solid var(--border-color)',
+                background: username === 'admin' ? '#fef2f2' : '#f8fafc',
+                border: username === 'admin' ? '1px solid #dc2626' : '1px solid var(--border-color)',
                 fontSize: '0.75rem',
-                color: '#fff'
+                color: 'var(--text-main)'
               }}
             >
               <div style={{ fontWeight: 600 }}>admin</div>
@@ -225,4 +225,3 @@ export default function Login() {
     </div>
   );
 }
-

@@ -25,15 +25,45 @@ def get_account_ring(
     cur.execute("SELECT DISTINCT account_id FROM transaction WHERE is_fraud = true;")
     fraud_accounts = set(r["account_id"] for r in cur.fetchall())
 
-    # 2. Fetch center account from MongoDB
+    # 2. Fetch center account from MongoDB (or construct from PG if new company account)
     center_doc = mongo.account_graph.find_one({"account_id": account_id})
     if not center_doc:
-        cur.close()
-        conn.close()
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Account #{account_id} not found in graph database."
-        )
+        # Check if account exists in PostgreSQL
+        cur.execute("""
+            SELECT a.account_id, a.account_number, c.first_name, c.last_name
+            FROM account a
+            JOIN customer c ON c.customer_id = a.customer_id
+            WHERE a.account_id = %s;
+        """, (account_id,))
+        acc_info = cur.fetchone()
+        if not acc_info:
+            cur.close()
+            conn.close()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Account #{account_id} not found."
+            )
+        # Find related merchants and neighboring accounts
+        cur.execute("""
+            SELECT DISTINCT merchant_id FROM transaction WHERE account_id = %s;
+        """, (account_id,))
+        merch_ids = [r["merchant_id"] for r in cur.fetchall()]
+        neighbors = []
+        if merch_ids:
+            cur.execute("""
+                SELECT account_id, COUNT(DISTINCT merchant_id) as shared_cnt
+                FROM transaction
+                WHERE merchant_id = ANY(%s) AND account_id <> %s
+                GROUP BY account_id
+                ORDER BY shared_cnt DESC
+                LIMIT 30;
+            """, (merch_ids, account_id))
+            neighbors = [{"account_id": r["account_id"], "shared_merchant_count": r["shared_cnt"]} for r in cur.fetchall()]
+        center_doc = {
+            "account_id": account_id,
+            "degree": len(neighbors),
+            "neighbors": neighbors
+        }
 
     all_raw_neighbors = center_doc.get("neighbors", [])
     raw_degree = center_doc.get("degree", len(all_raw_neighbors))

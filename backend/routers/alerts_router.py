@@ -45,7 +45,7 @@ def get_alerts(
         JOIN customer c ON c.customer_id = a.customer_id
         JOIN merchant m ON m.merchant_id = t.merchant_id
         LEFT JOIN analyst an ON an.analyst_id = al.analyst_id
-        WHERE 1=1
+        WHERE t.source = 'company'
     """
     params = []
     if status_filter:

@@ -52,12 +52,10 @@ export default function RingExplorer() {
   useEffect(() => {
     if (!containerRef.current || !graphData) return;
 
-    // Destroy existing instance
     if (cyRef.current) {
       cyRef.current.destroy();
     }
 
-    // Format elements for Cytoscape
     const elements = [
       ...graphData.nodes.map(n => ({
         data: {
@@ -85,56 +83,57 @@ export default function RingExplorer() {
           selector: 'node',
           style: {
             'label': 'data(label)',
-            'color': '#cbd5e1',
+            'color': '#1e293b',
             'font-size': '11px',
+            'font-weight': 600,
             'font-family': 'Inter, sans-serif',
             'text-valign': 'bottom',
             'text-margin-y': 6,
-            'background-color': '#8b5cf6',
-            'width': 26,
-            'height': 26,
+            'background-color': '#7c3aed',
+            'width': 28,
+            'height': 28,
             'border-width': 2,
-            'border-color': '#0f172a'
+            'border-color': '#ffffff'
           }
         },
         {
           selector: 'node[?raw.is_center]',
           style: {
-            'background-color': '#f59e0b',
+            'background-color': '#d97706',
             'border-color': '#ffffff',
             'border-width': 3,
             'width': 38,
             'height': 38,
-            'font-size': '13px',
+            'font-size': '12px',
             'font-weight': 'bold',
-            'color': '#fde68a',
+            'color': '#92400e',
             'z-index': 10
           }
         },
         {
           selector: 'node[?raw.is_fraud]',
           style: {
-            'background-color': '#ef4444',
-            'border-color': '#fca5a5',
-            'border-width': 2,
-            'width': 30,
-            'height': 30,
-            'color': '#fca5a5'
+            'background-color': '#dc2626',
+            'border-color': '#ffffff',
+            'border-width': 2.5,
+            'width': 32,
+            'height': 32,
+            'color': '#b91c1c'
           }
         },
         {
           selector: 'edge',
           style: {
             'width': 'mapData(weight, 1, 50, 1.5, 5)',
-            'line-color': '#475569',
-            'opacity': 0.6,
+            'line-color': '#94a3b8',
+            'opacity': 0.65,
             'curve-style': 'bezier'
           }
         },
         {
           selector: 'node:selected',
           style: {
-            'border-color': '#38bdf8',
+            'border-color': '#2563eb',
             'border-width': 4
           }
         }
@@ -194,41 +193,40 @@ export default function RingExplorer() {
       {/* Header & Controls */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '16px' }}>
         <div>
-          <h1 style={{ fontSize: '1.4rem', fontWeight: 800, color: '#fff', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Network size={24} color="#8b5cf6" />
+          <h1 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Network size={24} color="#7c3aed" />
             Interactive Fraud Ring Explorer (Cytoscape.js)
           </h1>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-            Visualizes multi-hop account clusters connected through identical 24h merchant transacting footprints.
+            Dynamic graph visualization of multi-hop account syndicates and shared merchant transaction density.
           </p>
         </div>
 
-        {/* Filter / Search Form */}
-        <form onSubmit={handleSearch} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '6px 12px', gap: '8px' }}>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>Account ID:</span>
+        {/* Input Form */}
+        <form onSubmit={handleSearch} style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '4px 10px', gap: '6px', boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.03)' }}>
+            <span style={{ fontSize: '0.78rem', color: 'var(--text-dim)', fontWeight: 600 }}>Account ID:</span>
             <input
               type="number"
               min="1"
-              max="999"
               value={accountId}
               onChange={e => setAccountId(e.target.value)}
               className="mono"
-              style={{ width: '80px', background: 'transparent', border: 'none', color: '#fff', fontSize: '0.85rem', outline: 'none' }}
+              style={{ width: '80px', background: 'transparent', border: 'none', color: 'var(--text-main)', fontWeight: 600, outline: 'none', fontSize: '0.85rem' }}
               required
             />
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '6px 12px', gap: '8px' }}>
-            <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>Hops:</span>
+          <div style={{ display: 'flex', alignItems: 'center', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '4px 10px', gap: '6px', boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.03)' }}>
+            <span style={{ fontSize: '0.78rem', color: 'var(--text-dim)', fontWeight: 600 }}>Depth:</span>
             <select
               value={hops}
               onChange={e => setHops(parseInt(e.target.value))}
-              style={{ background: 'transparent', border: 'none', color: '#fff', fontSize: '0.85rem', outline: 'none' }}
+              style={{ background: 'transparent', border: 'none', color: 'var(--text-main)', fontWeight: 600, outline: 'none', fontSize: '0.82rem', cursor: 'pointer' }}
             >
-              <option value={1} style={{ background: '#111827' }}>1 Hop (Direct)</option>
-              <option value={2} style={{ background: '#111827' }}>2 Hops (Expanded)</option>
-              <option value={3} style={{ background: '#111827' }}>3 Hops (Syndicate)</option>
+              <option value={1}>1 Hop (Direct Neighbors)</option>
+              <option value={2}>2 Hops (Expanded)</option>
+              <option value={3}>3 Hops (Syndicate)</option>
             </select>
           </div>
 
@@ -236,13 +234,14 @@ export default function RingExplorer() {
             type="submit"
             disabled={loading}
             style={{
-              background: '#8b5cf6',
-              color: '#fff',
+              background: '#7c3aed',
+              color: '#ffffff',
               padding: '8px 16px',
               borderRadius: '8px',
               fontWeight: 600,
               fontSize: '0.82rem',
-              cursor: loading ? 'not-allowed' : 'pointer'
+              cursor: loading ? 'not-allowed' : 'pointer',
+              boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)'
             }}
           >
             {loading ? 'Traversing Graph...' : 'Explore Ring'}
@@ -253,8 +252,8 @@ export default function RingExplorer() {
       {/* Explanatory Density Banner */}
       {graphData && (
         <div style={{
-          background: 'rgba(59, 130, 246, 0.1)',
-          border: '1px solid rgba(59, 130, 246, 0.25)',
+          background: '#eff6ff',
+          border: '1px solid #bfdbfe',
           borderRadius: '8px',
           padding: '12px 18px',
           marginBottom: '20px',
@@ -262,7 +261,7 @@ export default function RingExplorer() {
           alignItems: 'center',
           gap: '12px',
           fontSize: '0.82rem',
-          color: '#93c5fd'
+          color: '#1e40af'
         }}>
           <Info size={20} style={{ flexShrink: 0 }} />
           <div>
@@ -273,7 +272,7 @@ export default function RingExplorer() {
       )}
 
       {error && (
-        <div style={{ background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#fca5a5', padding: '12px', borderRadius: '8px', marginBottom: '20px' }}>
+        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', padding: '12px', borderRadius: '8px', marginBottom: '20px' }}>
           {error}
         </div>
       )}
@@ -286,10 +285,10 @@ export default function RingExplorer() {
           style={{
             width: '100%',
             height: '620px',
-            background: '#070b14',
+            background: '#f8fafc',
             borderRadius: '12px',
             border: '1px solid var(--border-color)',
-            boxShadow: 'inset 0 2px 10px rgba(0,0,0,0.6)'
+            boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.05)'
           }}
         />
 
@@ -298,7 +297,7 @@ export default function RingExplorer() {
           position: 'absolute',
           top: '16px',
           left: '16px',
-          background: 'rgba(17, 24, 39, 0.85)',
+          background: 'rgba(255, 255, 255, 0.95)',
           backdropFilter: 'blur(8px)',
           border: '1px solid var(--border-color)',
           borderRadius: '8px',
@@ -306,20 +305,21 @@ export default function RingExplorer() {
           display: 'flex',
           flexDirection: 'column',
           gap: '6px',
-          fontSize: '0.74rem'
+          fontSize: '0.74rem',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.06)'
         }}>
           <div style={{ fontWeight: 600, color: 'var(--text-muted)', marginBottom: '2px' }}>Network Roles</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#f59e0b', border: '2px solid #fff' }} />
-            <span>Center Investigated Account</span>
+            <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#d97706', border: '2px solid #fff' }} />
+            <span style={{ color: 'var(--text-main)' }}>Center Investigated Account</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#ef4444' }} />
-            <span>Confirmed Fraud Syndicate Peer</span>
+            <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#dc2626' }} />
+            <span style={{ color: 'var(--text-main)' }}>Confirmed Fraud Syndicate Peer</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#8b5cf6' }} />
-            <span>High-Traffic Merchant Peer</span>
+            <span style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#7c3aed' }} />
+            <span style={{ color: 'var(--text-main)' }}>High-Traffic Merchant Peer</span>
           </div>
         </div>
 
@@ -330,11 +330,12 @@ export default function RingExplorer() {
           left: '16px',
           display: 'flex',
           gap: '6px',
-          background: 'rgba(17, 24, 39, 0.85)',
+          background: 'rgba(255, 255, 255, 0.95)',
           backdropFilter: 'blur(8px)',
           border: '1px solid var(--border-color)',
           borderRadius: '8px',
-          padding: '6px'
+          padding: '6px',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.06)'
         }}>
           <button
             onClick={() => handleZoom(1.25)}
@@ -366,12 +367,12 @@ export default function RingExplorer() {
             top: '16px',
             right: '16px',
             width: '320px',
-            background: 'rgba(17, 24, 39, 0.95)',
+            background: 'rgba(255, 255, 255, 0.98)',
             backdropFilter: 'blur(10px)',
             border: '1px solid var(--border-color)',
             borderRadius: '10px',
             padding: '18px',
-            boxShadow: '0 8px 30px rgba(0,0,0,0.5)',
+            boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.04)',
             fontSize: '0.82rem'
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px' }}>
@@ -383,7 +384,7 @@ export default function RingExplorer() {
               </button>
             </div>
 
-            <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff', marginBottom: '4px' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '4px' }}>
               {selectedNode.customer_name || `Account #${selectedNode.account_id}`}
             </h3>
             <div className="mono" style={{ fontSize: '0.74rem', color: 'var(--text-dim)', marginBottom: '14px' }}>
@@ -393,22 +394,22 @@ export default function RingExplorer() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', color: 'var(--text-muted)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>Account ID:</span>
-                <strong style={{ color: '#fff' }}>#{selectedNode.account_id}</strong>
+                <strong style={{ color: 'var(--text-main)' }}>#{selectedNode.account_id}</strong>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>Known Fraud:</span>
-                <strong style={{ color: selectedNode.is_fraud ? '#f87171' : '#34d399' }}>
+                <strong style={{ color: selectedNode.is_fraud ? '#dc2626' : '#059669' }}>
                   {selectedNode.is_fraud ? 'YES (Confirmed)' : 'No Prior Offenses'}
                 </strong>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>Network Degree:</span>
-                <strong style={{ color: '#fff' }}>{selectedNode.degree} linked accounts</strong>
+                <strong style={{ color: 'var(--text-main)' }}>{selectedNode.degree} linked accounts</strong>
               </div>
               {selectedNode.shared_merchants_with_center > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <span>Shared Merchants:</span>
-                  <strong style={{ color: '#fbbf24' }}>{selectedNode.shared_merchants_with_center} merchants</strong>
+                  <strong style={{ color: '#d97706' }}>{selectedNode.shared_merchants_with_center} merchants</strong>
                 </div>
               )}
             </div>
@@ -420,17 +421,17 @@ export default function RingExplorer() {
                   setSearchParams({ account: selectedNode.account_id });
                   loadRing(selectedNode.account_id, hops);
                 }}
+                className="btn btn-secondary"
                 style={{
                   marginTop: '16px',
                   width: '100%',
-                  background: 'var(--bg-primary)',
-                  border: '1px solid #3b82f6',
-                  color: '#60a5fa',
+                  color: '#2563eb',
+                  borderColor: '#bfdbfe',
+                  background: '#eff6ff',
                   padding: '8px',
                   borderRadius: '6px',
                   fontWeight: 600,
-                  fontSize: '0.78rem',
-                  cursor: 'pointer'
+                  fontSize: '0.78rem'
                 }}
               >
                 Re-Center Graph on This Account
@@ -442,4 +443,3 @@ export default function RingExplorer() {
     </div>
   );
 }
-

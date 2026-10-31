@@ -38,6 +38,30 @@ export const api = {
     }),
   getMe: () => apiRequest('/auth/me'),
 
+  // Company Transactions & AI Analysis
+  createCompanyTransaction: (payload) =>
+    apiRequest('/transactions', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  batchIngestTransactions: (transactions) =>
+    apiRequest('/transactions/batch', {
+      method: 'POST',
+      body: JSON.stringify({ transactions }),
+    }),
+  getCompanyTransactions: (params = {}) => {
+    const q = new URLSearchParams(params).toString();
+    return apiRequest(`/transactions?${q}`);
+  },
+  loadDemoCompanyBatch: () =>
+    apiRequest('/transactions/demo-batch', {
+      method: 'POST',
+    }),
+  clearCompanyTransactions: () =>
+    apiRequest('/transactions/clear', {
+      method: 'DELETE',
+    }),
+
   // Scoring
   scoreTransaction: (payload) =>
     apiRequest('/score', {

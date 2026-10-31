@@ -23,11 +23,52 @@ class TokenResponse(BaseModel):
 # Scoring
 # ------------------------------------------------------------------------------
 class TransactionScoreRequest(BaseModel):
-    account_id: int = Field(..., ge=1, le=999, description="Target bank account ID")
+    account_id: int = Field(..., ge=1, description="Target bank account ID")
     merchant_id: int = Field(1, ge=1, description="Merchant ID")
     amount: float = Field(..., gt=0, description="Transaction amount in USD")
     txn_timestamp: Optional[str] = Field(None, description="ISO timestamp (defaults to current time)")
     save_alert: Optional[bool] = Field(True, description="Whether to create an alert if risk is High")
+
+# ------------------------------------------------------------------------------
+# Company / Bank Transactions & AI Analysis
+# ------------------------------------------------------------------------------
+class CompanyTransactionCreate(BaseModel):
+    account_id: Optional[int] = Field(None, description="Existing account ID or leave empty to auto-assign")
+    account_number: Optional[str] = Field(None, description="Bank account number (e.g. ACC-1002)")
+    customer_name: Optional[str] = Field("Bank Customer", description="Account holder or company name")
+    merchant_id: Optional[int] = Field(None, description="Existing merchant ID or leave empty to auto-assign")
+    merchant_name: Optional[str] = Field("Merchant Store", description="Counterparty or merchant name")
+    amount: float = Field(..., gt=0, description="Transaction amount in USD")
+    txn_timestamp: Optional[str] = Field(None, description="ISO or standard timestamp")
+    notes: Optional[str] = Field(None, description="Optional bank analyst notes")
+
+class CompanyTransactionItem(BaseModel):
+    transaction_id: int
+    trans_num: str
+    account_id: int
+    account_number: Optional[str] = None
+    customer_name: str
+    merchant_id: int
+    merchant_name: str
+    amount: float
+    txn_timestamp: str
+    fraud_probability: float
+    risk_label: str
+    is_fraud: bool
+    alert_id: Optional[int] = None
+    top_reasons: Optional[List[FeatureReason]] = []
+    created_at: str
+
+class BatchIngestRequest(BaseModel):
+    transactions: List[CompanyTransactionCreate]
+
+class BatchIngestResponse(BaseModel):
+    total_ingested: int
+    high_risk_count: int
+    medium_risk_count: int
+    low_risk_count: int
+    alerts_created: int
+    results: List[CompanyTransactionItem]
 
 class FeatureReason(BaseModel):
     feature: str

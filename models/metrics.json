@@ -1,0 +1,110 @@
+{
+  "Logistic Regression": {
+    "model_name": "1. Logistic Regression",
+    "threshold": 0.9796,
+    "precision": 0.256,
+    "recall": 0.4394,
+    "f1": 0.3235,
+    "pr_auc": 0.1193,
+    "roc_auc": 0.8361,
+    "confusion_matrix": {
+      "tp": 406,
+      "fp": 1180,
+      "fn": 518,
+      "tn": 275756
+    },
+    "precision_at_recall_50": 0.1016,
+    "precision_at_recall_70": 0.0977,
+    "accuracy": 0.9939
+  },
+  "Random Forest": {
+    "model_name": "2. Random Forest",
+    "threshold": 0.9807,
+    "precision": 0.5311,
+    "recall": 0.5173,
+    "f1": 0.5241,
+    "pr_auc": 0.4819,
+    "roc_auc": 0.9767,
+    "confusion_matrix": {
+      "tp": 478,
+      "fp": 422,
+      "fn": 446,
+      "tn": 276514
+    },
+    "precision_at_recall_50": 0.5521,
+    "precision_at_recall_70": 0.2056,
+    "accuracy": 0.9969
+  },
+  "Model A": {
+    "model_name": "3. XGBoost (Model A - Tx Only)",
+    "threshold": 0.9799,
+    "precision": 0.4413,
+    "recall": 0.5574,
+    "f1": 0.4926,
+    "pr_auc": 0.4377,
+    "roc_auc": 0.9801,
+    "confusion_matrix": {
+      "tp": 515,
+      "fp": 652,
+      "fn": 409,
+      "tn": 276284
+    },
+    "precision_at_recall_50": 0.5116,
+    "precision_at_recall_70": 0.2101,
+    "accuracy": 0.9962
+  },
+  "Model B": {
+    "model_name": "4. XGBoost (Model B - Tx + Graph)",
+    "threshold": 0.9735,
+    "precision": 0.4881,
+    "recall": 0.5097,
+    "f1": 0.4987,
+    "pr_auc": 0.4777,
+    "roc_auc": 0.9796,
+    "confusion_matrix": {
+      "tp": 471,
+      "fp": 494,
+      "fn": 453,
+      "tn": 276442
+    },
+    "precision_at_recall_50": 0.5011,
+    "precision_at_recall_70": 0.2282,
+    "accuracy": 0.9966
+  },
+  "Model B without hops": {
+    "model_name": "5. XGBoost (Model B w/o hops)",
+    "threshold": 0.9691,
+    "precision": 0.4792,
+    "recall": 0.5108,
+    "f1": 0.4945,
+    "pr_auc": 0.4619,
+    "roc_auc": 0.9804,
+    "confusion_matrix": {
+      "tp": 472,
+      "fp": 513,
+      "fn": 452,
+      "tn": 276423
+    },
+    "precision_at_recall_50": 0.4879,
+    "precision_at_recall_70": 0.2142,
+    "accuracy": 0.9965
+  },
+  "Model A + Prior Fraud": {
+    "model_name": "6. XGBoost (Model A + Prior Fraud)",
+    "threshold": 0.9901,
+    "precision": 0.4948,
+    "recall": 0.6126,
+    "f1": 0.5474,
+    "pr_auc": 0.5858,
+    "roc_auc": 0.9853,
+    "confusion_matrix": {
+      "tp": 566,
+      "fp": 578,
+      "fn": 358,
+      "tn": 276358
+    },
+    "precision_at_recall_50": 0.6754,
+    "precision_at_recall_70": 0.3685,
+    "accuracy": 0.9966
+  }
+}
