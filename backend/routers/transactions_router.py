@@ -389,7 +389,8 @@ def execute_batch_transactions(
                 top_reasons=reasons,
                 created_at=created_at_str
             ))
-        except Exception:
+        except Exception as e:
+            print(f"[BATCH INGESTION WARNING] Row {idx} skipped: {type(e).__name__}: {e}")
             cur.execute(f"ROLLBACK TO SAVEPOINT sp_{idx};")
             continue
 
