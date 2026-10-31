@@ -78,6 +78,10 @@ export default function RingExplorer() {
     const cy = cytoscape({
       container: containerRef.current,
       elements,
+      wheelSensitivity: 0.08, // Significantly reduces trackpad zoom sensitivity to prevent graph vanishing
+      minZoom: 0.35,          // Hard lower bound: graph can never shrink to an invisible dot
+      maxZoom: 2.2,           // Hard upper bound: prevents zooming into empty space
+      boxSelectionEnabled: false,
       style: [
         {
           selector: 'node',
@@ -148,8 +152,14 @@ export default function RingExplorer() {
         levelWidth: () => 2,
         padding: 50,
         animate: true,
-        animationDuration: 500
+        animationDuration: 500,
+        fit: true
       }
+    });
+
+    cy.on('layoutstop', () => {
+      cy.fit(undefined, 50);
+      cy.center();
     });
 
     cy.on('tap', 'node', (evt) => {
@@ -178,13 +188,19 @@ export default function RingExplorer() {
 
   const handleZoom = (factor) => {
     if (cyRef.current) {
-      cyRef.current.zoom(cyRef.current.zoom() * factor);
+      const cy = cyRef.current;
+      const targetZoom = Math.min(Math.max(cy.zoom() * factor, 0.35), 2.2);
+      cy.zoom({
+        level: targetZoom,
+        renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 }
+      });
     }
   };
 
   const handleFit = () => {
     if (cyRef.current) {
-      cyRef.current.fit(undefined, 40);
+      cyRef.current.fit(undefined, 50);
+      cyRef.current.center();
     }
   };
 
@@ -329,34 +345,51 @@ export default function RingExplorer() {
           bottom: '16px',
           left: '16px',
           display: 'flex',
+          alignItems: 'center',
           gap: '6px',
           background: 'rgba(255, 255, 255, 0.95)',
           backdropFilter: 'blur(8px)',
           border: '1px solid var(--border-color)',
           borderRadius: '8px',
-          padding: '6px',
+          padding: '6px 10px',
           boxShadow: '0 2px 8px rgba(0,0,0,0.06)'
         }}>
           <button
-            onClick={() => handleZoom(1.25)}
-            style={{ padding: '6px', borderRadius: '6px', color: 'var(--text-muted)', background: 'transparent' }}
+            type="button"
+            onClick={() => handleZoom(1.2)}
+            style={{ padding: '6px', borderRadius: '6px', color: 'var(--text-main)', background: '#f1f5f9', border: '1px solid var(--border-color)', cursor: 'pointer' }}
             title="Zoom In"
           >
-            <ZoomIn size={18} />
+            <ZoomIn size={16} />
           </button>
           <button
-            onClick={() => handleZoom(0.8)}
-            style={{ padding: '6px', borderRadius: '6px', color: 'var(--text-muted)', background: 'transparent' }}
+            type="button"
+            onClick={() => handleZoom(0.83)}
+            style={{ padding: '6px', borderRadius: '6px', color: 'var(--text-main)', background: '#f1f5f9', border: '1px solid var(--border-color)', cursor: 'pointer' }}
             title="Zoom Out"
           >
-            <ZoomOut size={18} />
+            <ZoomOut size={16} />
           </button>
           <button
+            type="button"
             onClick={handleFit}
-            style={{ padding: '6px', borderRadius: '6px', color: 'var(--text-muted)', background: 'transparent' }}
-            title="Fit to Screen"
+            style={{
+              padding: '6px 12px',
+              borderRadius: '6px',
+              color: '#1d4ed8',
+              background: '#eff6ff',
+              border: '1px solid #bfdbfe',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontSize: '0.78rem',
+              fontWeight: 600
+            }}
+            title="Fit to Screen & Center View"
           >
-            <Maximize2 size={18} />
+            <Maximize2 size={14} />
+            Reset View (Fit)
           </button>
         </div>
 
