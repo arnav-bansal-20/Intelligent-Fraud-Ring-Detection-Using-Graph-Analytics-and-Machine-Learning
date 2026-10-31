@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import {
@@ -17,12 +17,25 @@ import {
   PlusCircle,
   Trash2,
   Search,
-  ExternalLink
+  ExternalLink,
+  Download,
+  FileText,
+  X,
+  FileUp,
+  Check
 } from 'lucide-react';
 
 export default function ScoreTransaction() {
   const [activeTab, setActiveTab] = useState('single'); // 'single' | 'batch' | 'history'
   const [searchParams] = useSearchParams();
+
+  // File upload state
+  const fileInputRef = useRef(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [filePreview, setFilePreview] = useState([]);
+  const [totalFileRows, setTotalFileRows] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const [showPasteText, setShowPasteText] = useState(false);
 
   // Single transaction form state
   const [formData, setFormData] = useState({
@@ -95,6 +108,101 @@ export default function ScoreTransaction() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Handle File Selection (via Picker or Drag & Drop)
+  const handleFileChange = (file) => {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      setError('Please select a valid .csv file format.');
+      return;
+    }
+    setError('');
+    setSelectedFile(file);
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target.result;
+      setBatchCsvText(text);
+      const lines = text.split('\n').filter(l => l.trim().length > 0);
+      const isHeader = lines.length > 0 && lines[0].toLowerCase().includes('account');
+      const dataLines = isHeader ? lines.slice(1) : lines;
+      setTotalFileRows(dataLines.length);
+
+      const previews = [];
+      for (let i = 0; i < Math.min(5, dataLines.length); i++) {
+        const parts = dataLines[i].split(',').map(p => p.trim().replace(/^["']|["']$/g, ''));
+        previews.push({
+          account_number: parts[0] || `ACC-${i+1}`,
+          customer_name: parts[1] || 'Bank Client',
+          merchant_name: parts[2] || 'Counterparty',
+          amount: parts[3] || '50.00',
+          timestamp: parts[4] || new Date().toISOString().slice(0, 19),
+          notes: parts[5] || 'CSV file record'
+        });
+      }
+      setFilePreview(previews);
+    };
+    reader.readAsText(file);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleFileChange(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  // Submit Uploaded File directly to backend
+  const handleUploadFileSubmit = async () => {
+    if (!selectedFile) {
+      setError('Please select or drag a CSV file first.');
+      return;
+    }
+
+    setBatchLoading(true);
+    setError('');
+    setBatchResult(null);
+
+    try {
+      const res = await api.uploadTransactionCsv(selectedFile);
+      setBatchResult(res);
+      setSuccessMsg(`CSV File "${selectedFile.name}" successfully analyzed: ${res.total_ingested} records screened, ${res.alerts_created} alerts generated.`);
+    } catch (err) {
+      setError(err.message || 'Failed to analyze uploaded CSV file');
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  // Download Sample CSV template
+  const handleDownloadSampleCsv = () => {
+    const csvContent = "account_number,customer_name,merchant_name,amount,timestamp,notes\n" +
+      "ACC-CORP-501,Apex Logistics Inc,Direct Wire Exchange,1450.00,2026-10-31T14:30:00,High-value wire transfer\n" +
+      "ACC-CORP-502,Beacon Medical Supply,Office Superstore,74.50,2026-10-31T14:35:00,Routine supply order\n" +
+      "ACC-CORP-503,Vertex Capital Partners,Global Cloud Hosting,310.00,2026-10-31T14:40:00,Monthly server hosting\n" +
+      "ACC-CORP-504,Cascade Energy Corp,Direct Wire Exchange,2800.00,2026-10-31T14:45:00,Urgent vendor payment\n" +
+      "ACC-CORP-505,Summit Media Group,City Coffee Roasters,18.75,2026-10-31T14:50:00,Team catering\n";
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', 'sample_company_transactions.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   // Handle batch CSV parsing
@@ -236,7 +344,7 @@ export default function ScoreTransaction() {
           }}
         >
           <Upload size={16} />
-          Batch Ingest / CSV Import
+          Upload CSV File
         </button>
 
         <button
@@ -532,68 +640,229 @@ export default function ScoreTransaction() {
       )}
 
       {/* ========================================================================= */}
-      {/* TAB 2: BATCH CSV & BULK INGESTION                                         */}
+      {/* TAB 2: UPLOAD CSV & BATCH INGESTION                                       */}
       {/* ========================================================================= */}
       {activeTab === 'batch' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
           <div className="card" style={{ padding: '24px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '20px' }}>
               <div>
-                <h2 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                  Batch Transaction Ingestion & Automated AI Screening
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span className="badge badge-blue">File Ingestion Engine</span>
+                  <span className="badge badge-purple">Point-in-Time Graph Features</span>
+                </div>
+                <h2 style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--text-main)', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <FileSpreadsheet size={20} color="#2563eb" />
+                  Upload Company / Bank Transactions CSV
                 </h2>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                  Upload CSV records or paste comma-separated transactions. Each row is scored against the pre-trained model and graph store.
+                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  Select or drag a CSV file with your company/bank records. The system parses headers, extracts multi-hop graph proximity, and scores each transaction with the calibrated XGBoost model.
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={handleLoadDemoBatch}
-                disabled={batchLoading}
-                className="btn btn-secondary"
-                style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '9px 14px', background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1d4ed8' }}
-              >
-                <Sparkles size={16} color="#d97706" />
-                Load Realistic Bank Demo Batch (6 Transactions)
-              </button>
-            </div>
-
-            <form onSubmit={handleBatchSubmit}>
-              <div style={{ marginBottom: '14px' }}>
-                <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '6px' }}>
-                  CSV Format: <span className="mono">account_number, customer_name, merchant_name, amount, [timestamp], [notes]</span>
-                </label>
-                <textarea
-                  rows={6}
-                  value={batchCsvText}
-                  onChange={e => setBatchCsvText(e.target.value)}
-                  placeholder={`ACC-BANK-01, Sarah Connor, Whole Foods Market, 45.20\nACC-BANK-02, Marcus Wright, Electronics Depot, 1850.00\nACC-BANK-03, Kyle Reese, Metro Gas Station, 35.00`}
-                  className="mono"
-                  style={{ width: '100%', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', color: 'var(--text-main)', fontSize: '0.82rem' }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                 <button
                   type="button"
-                  onClick={() => setBatchCsvText('')}
+                  onClick={handleDownloadSampleCsv}
                   className="btn btn-secondary"
-                  style={{ padding: '9px 16px' }}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 14px', fontSize: '0.8rem' }}
                 >
-                  Clear CSV
+                  <Download size={15} />
+                  Download CSV Template
                 </button>
 
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={handleLoadDemoBatch}
                   disabled={batchLoading}
-                  className="btn btn-primary"
-                  style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '9px 18px', fontWeight: 700 }}
+                  className="btn btn-secondary"
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 14px', fontSize: '0.8rem', background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1d4ed8' }}
                 >
-                  {batchLoading ? 'Screening Batch...' : 'Run AI Analysis on All Records'}
+                  <Sparkles size={15} color="#d97706" />
+                  Load Bank Demo Batch
                 </button>
               </div>
-            </form>
+            </div>
+
+            {/* Hidden File Input */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept=".csv"
+              style={{ display: 'none' }}
+              onChange={e => {
+                if (e.target.files && e.target.files.length > 0) {
+                  handleFileChange(e.target.files[0]);
+                }
+              }}
+            />
+
+            {/* Drag & Drop Zone */}
+            <div
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                border: `2px dashed ${isDragging ? '#2563eb' : selectedFile ? '#059669' : '#cbd5e1'}`,
+                borderRadius: '12px',
+                padding: '36px 24px',
+                textAlign: 'center',
+                background: isDragging ? '#eff6ff' : selectedFile ? '#f0fdf4' : '#f8fafc',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                marginBottom: '20px'
+              }}
+            >
+              {selectedFile ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+                  <div style={{ padding: '12px', background: '#dcfce7', borderRadius: '50%', color: '#059669' }}>
+                    <FileSpreadsheet size={32} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '1rem', fontWeight: 700, color: '#065f46' }}>
+                      {selectedFile.name}
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: '#047857', marginTop: '3px' }}>
+                      {(selectedFile.size / 1024).toFixed(1)} KB &bull; ~{totalFileRows} records detected &bull; Click to choose a different file
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }} onClick={e => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      onClick={() => { setSelectedFile(null); setFilePreview([]); setBatchCsvText(''); }}
+                      className="btn btn-secondary"
+                      style={{ fontSize: '0.78rem', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      <X size={14} /> Remove File
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleUploadFileSubmit}
+                      disabled={batchLoading}
+                      className="btn btn-primary"
+                      style={{ fontSize: '0.82rem', padding: '6px 18px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      <FileUp size={15} />
+                      {batchLoading ? 'Screening Records...' : `Upload & Analyze ${totalFileRows} Records`}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+                  <div style={{ padding: '14px', background: '#eff6ff', borderRadius: '50%', color: '#2563eb' }}>
+                    <Upload size={32} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.98rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                      Drag and drop your company transactions CSV file here
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                      or <span style={{ color: '#2563eb', fontWeight: 600, textDecoration: 'underline' }}>browse from your computer</span>
+                    </div>
+                  </div>
+                  <div className="mono" style={{ fontSize: '0.74rem', color: 'var(--text-dim)', background: '#ffffff', padding: '4px 10px', borderRadius: '6px', border: '1px solid var(--border-color)', marginTop: '4px' }}>
+                    Columns: account_number, customer_name, merchant_name, amount, [timestamp], [notes]
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* CSV Data Preview Table */}
+            {filePreview.length > 0 && (
+              <div style={{ marginBottom: '20px', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <FileText size={16} color="#2563eb" />
+                    File Preview (First {filePreview.length} of {totalFileRows} rows)
+                  </div>
+                  <span className="badge badge-blue">Ready for AI Scoring</span>
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '1px solid var(--border-color)', textAlign: 'left', color: 'var(--text-muted)', background: '#f8fafc' }}>
+                        <th style={{ padding: '8px' }}>Account Number</th>
+                        <th style={{ padding: '8px' }}>Customer Name</th>
+                        <th style={{ padding: '8px' }}>Merchant / Vendor</th>
+                        <th style={{ padding: '8px' }}>Amount</th>
+                        <th style={{ padding: '8px' }}>Timestamp</th>
+                        <th style={{ padding: '8px' }}>Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filePreview.map((row, idx) => (
+                        <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                          <td className="mono" style={{ padding: '8px', fontWeight: 600 }}>{row.account_number}</td>
+                          <td style={{ padding: '8px' }}>{row.customer_name}</td>
+                          <td style={{ padding: '8px' }}>{row.merchant_name}</td>
+                          <td className="mono" style={{ padding: '8px', fontWeight: 700 }}>${parseFloat(row.amount || 0).toFixed(2)}</td>
+                          <td className="mono" style={{ padding: '8px', color: 'var(--text-dim)' }}>{row.timestamp}</td>
+                          <td style={{ padding: '8px', color: 'var(--text-dim)' }}>{row.notes}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Toggleable Text Paste Option */}
+            <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', marginTop: '12px' }}>
+              <button
+                type="button"
+                onClick={() => setShowPasteText(!showPasteText)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#2563eb',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: 0
+                }}
+              >
+                {showPasteText ? '− Hide CSV Raw Text Editor' : '+ Or paste raw comma-separated text manually'}
+              </button>
+
+              {showPasteText && (
+                <form onSubmit={handleBatchSubmit} style={{ marginTop: '14px' }}>
+                  <div style={{ marginBottom: '14px' }}>
+                    <textarea
+                      rows={5}
+                      value={batchCsvText}
+                      onChange={e => setBatchCsvText(e.target.value)}
+                      placeholder={`ACC-BANK-01, Sarah Connor, Whole Foods Market, 45.20\nACC-BANK-02, Marcus Wright, Electronics Depot, 1850.00\nACC-BANK-03, Kyle Reese, Metro Gas Station, 35.00`}
+                      className="mono"
+                      style={{ width: '100%', background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', color: 'var(--text-main)', fontSize: '0.82rem' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setBatchCsvText('')}
+                      className="btn btn-secondary"
+                      style={{ padding: '8px 16px', fontSize: '0.8rem' }}
+                    >
+                      Clear Text
+                    </button>
+
+                    <button
+                      type="submit"
+                      disabled={batchLoading}
+                      className="btn btn-primary"
+                      style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 18px', fontWeight: 700, fontSize: '0.82rem' }}
+                    >
+                      {batchLoading ? 'Screening Records...' : 'Analyze Pasted Records'}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
           </div>
 
           {/* Batch Ingestion KPI Cards */}

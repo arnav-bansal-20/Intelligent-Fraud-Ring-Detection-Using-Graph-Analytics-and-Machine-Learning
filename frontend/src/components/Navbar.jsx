@@ -67,7 +67,7 @@ export default function Navbar() {
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <NavLink to="/score" style={navItemStyle}>
           <SlidersHorizontal size={16} />
-          Add & Analyze
+          Add & Upload CSV
         </NavLink>
 
         <NavLink to="/alerts" style={navItemStyle}>

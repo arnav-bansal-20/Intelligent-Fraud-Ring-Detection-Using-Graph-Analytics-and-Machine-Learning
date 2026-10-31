@@ -1,10 +1,12 @@
 import os
+import io
+import csv
 import uuid
 import joblib
 import numpy as np
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File
 
 from backend.schemas import (
     CompanyTransactionCreate, CompanyTransactionItem,
@@ -292,30 +294,19 @@ def create_and_analyze_transaction(
         created_at=created_at_str
     )
 
-@router.post("/batch", response_model=BatchIngestResponse)
-def batch_ingest_transactions(
-    req: BatchIngestRequest,
-    conn = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    Ingest multiple company/bank transaction records in batch (max 200) and run AI scoring on each.
-    Handles individual bad rows gracefully with savepoints.
-    """
-    if len(req.transactions) > 200:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Batch size {len(req.transactions)} exceeds maximum allowed limit of 200 transactions."
-        )
-
+def execute_batch_transactions(
+    conn,
+    cur,
+    mongo,
+    transactions: List[CompanyTransactionCreate],
+    current_user: dict
+) -> BatchIngestResponse:
+    """Helper to process a list of transaction objects with row-level savepoints and return BatchIngestResponse."""
     bundle = get_model()
     model = bundle["model"]
     feature_cols = bundle["feature_cols"]
     high_threshold = float(bundle.get("threshold", 0.9735))
     medium_threshold = round(high_threshold * 0.5, 4)
-
-    cur = conn.cursor()
-    mongo = get_mongo_db()
 
     results: List[CompanyTransactionItem] = []
     high_cnt = 0
@@ -323,7 +314,7 @@ def batch_ingest_transactions(
     low_cnt = 0
     alerts_created = 0
 
-    for idx, item in enumerate(req.transactions):
+    for idx, item in enumerate(transactions):
         cur.execute(f"SAVEPOINT sp_{idx};")
         try:
             if item.txn_timestamp:
@@ -398,7 +389,7 @@ def batch_ingest_transactions(
                 top_reasons=reasons,
                 created_at=created_at_str
             ))
-        except Exception as e:
+        except Exception:
             cur.execute(f"ROLLBACK TO SAVEPOINT sp_{idx};")
             continue
 
@@ -413,6 +404,137 @@ def batch_ingest_transactions(
         alerts_created=alerts_created,
         results=results
     )
+
+@router.post("/batch", response_model=BatchIngestResponse)
+def batch_ingest_transactions(
+    req: BatchIngestRequest,
+    conn = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Ingest multiple company/bank transaction records in batch (max 200) and run AI scoring on each.
+    Handles individual bad rows gracefully with savepoints.
+    """
+    if len(req.transactions) > 200:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Batch size {len(req.transactions)} exceeds maximum allowed limit of 200 transactions."
+        )
+
+    cur = conn.cursor()
+    mongo = get_mongo_db()
+    return execute_batch_transactions(conn, cur, mongo, req.transactions, current_user)
+
+@router.post("/upload-csv", response_model=BatchIngestResponse)
+async def upload_transactions_csv(
+    file: UploadFile = File(...),
+    conn = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Upload a CSV file containing company/bank transaction records.
+    Parses headers or positional columns, and evaluates each record with the XGBoost model.
+    """
+    filename = file.filename or "upload.csv"
+    if not filename.lower().endswith(".csv") and file.content_type not in (
+        "text/csv", "application/vnd.ms-excel", "text/plain", "application/csv"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file must be a valid .csv file."
+        )
+
+    content = await file.read()
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        text = content.decode("latin-1")
+
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded CSV file is empty.")
+
+    reader = csv.reader(io.StringIO("\n".join(lines)))
+    rows = list(reader)
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No readable rows found in CSV.")
+
+    # Check for header
+    header = [h.strip().lower().replace(" ", "_") for h in rows[0]]
+    has_header = False
+    col_map = {}
+    if any(h in header for h in ["account", "account_number", "customer", "customer_name", "amount", "merchant", "merchant_name"]):
+        has_header = True
+        for idx, col in enumerate(header):
+            col_map[col] = idx
+
+    data_rows = rows[1:] if has_header else rows
+    if not data_rows:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CSV contains only a header row.")
+
+    if len(data_rows) > 300:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"CSV file contains {len(data_rows)} rows. Maximum allowed per upload is 300 rows."
+        )
+
+    transactions: List[CompanyTransactionCreate] = []
+    for r_idx, row in enumerate(data_rows):
+        if not row or all(not cell.strip() for cell in row):
+            continue
+
+        try:
+            if has_header:
+                def get_val(names, default=None):
+                    for name in names:
+                        if name in col_map and col_map[name] < len(row):
+                            v = row[col_map[name]].strip()
+                            if v:
+                                return v
+                    return default
+
+                acc_num = get_val(["account_number", "account_id", "account", "acc_num"], f"ACC-CSV-{r_idx+1}")
+                cust_name = get_val(["customer_name", "customer", "client_name", "name"], "Bank Client")
+                merch_name = get_val(["merchant_name", "merchant", "counterparty", "vendor"], "Commercial Merchant")
+                amt_str = get_val(["amount", "amt", "transaction_amount", "value"], "50.0")
+                ts_str = get_val(["txn_timestamp", "timestamp", "datetime", "date", "time"], None)
+                notes_str = get_val(["notes", "note", "description"], "CSV Upload")
+
+                try:
+                    amt = float(amt_str.replace("$", "").replace(",", ""))
+                except Exception:
+                    amt = 50.0
+            else:
+                acc_num = row[0].strip() if len(row) > 0 and row[0].strip() else f"ACC-CSV-{r_idx+1}"
+                cust_name = row[1].strip() if len(row) > 1 and row[1].strip() else "Bank Client"
+                merch_name = row[2].strip() if len(row) > 2 and row[2].strip() else "Commercial Merchant"
+                try:
+                    amt = float(row[3].strip().replace("$", "").replace(",", "")) if len(row) > 3 else 50.0
+                except Exception:
+                    amt = 50.0
+                ts_str = row[4].strip() if len(row) > 4 and row[4].strip() else None
+                notes_str = row[5].strip() if len(row) > 5 and row[5].strip() else "CSV Upload"
+
+            transactions.append(CompanyTransactionCreate(
+                account_number=acc_num,
+                customer_name=cust_name,
+                merchant_name=merch_name,
+                amount=amt,
+                txn_timestamp=ts_str,
+                notes=notes_str
+            ))
+        except Exception:
+            continue
+
+    if not transactions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not parse any valid transaction rows from the CSV file."
+        )
+
+    cur = conn.cursor()
+    mongo = get_mongo_db()
+    return execute_batch_transactions(conn, cur, mongo, transactions, current_user)
 
 @router.get("", response_model=List[CompanyTransactionItem])
 def list_company_transactions(

@@ -2,8 +2,9 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
 export async function apiRequest(endpoint, options = {}) {
   const token = localStorage.getItem('fraud_token');
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const headers = {
-    'Content-Type': 'application/json',
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     ...options.headers,
   };
@@ -49,6 +50,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ transactions }),
     }),
+  uploadTransactionCsv: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiRequest('/transactions/upload-csv', {
+      method: 'POST',
+      body: formData,
+    });
+  },
   getCompanyTransactions: (params = {}) => {
     const q = new URLSearchParams(params).toString();
     return apiRequest(`/transactions?${q}`);

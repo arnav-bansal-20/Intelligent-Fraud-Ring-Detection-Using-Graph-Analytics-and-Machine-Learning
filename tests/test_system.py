@@ -190,3 +190,32 @@ def test_dashboard_metrics_match_json():
     assert api_model["roc_auc"] == target["roc_auc"]
     assert api_model["threshold"] == target["threshold"]
 
+
+# 6. CSV File Upload Test
+def test_csv_upload_endpoint():
+    """Verify that uploading a CSV file to /api/transactions/upload-csv parses and scores records."""
+    from backend.main import app
+    from backend.auth import create_access_token
+
+    client = TestClient(app)
+    analyst_token = create_access_token({"sub": "analyst", "analyst_id": 1, "role": "analyst"})
+
+    csv_data = (
+        "account_number,customer_name,merchant_name,amount,timestamp,notes\n"
+        "ACC-CSV-TEST-1,Alpha Corp,SuperMart,125.00,2026-10-31T12:00:00,Supply purchase\n"
+        "ACC-CSV-TEST-2,Beta LLC,TechHub,1800.00,2026-10-31T12:05:00,Hardware buy\n"
+    )
+
+    resp = client.post(
+        "/api/transactions/upload-csv",
+        files={"file": ("test_run.csv", csv_data.encode("utf-8"), "text/csv")},
+        headers={"Authorization": f"Bearer {analyst_token}"}
+    )
+    assert resp.status_code == 200, f"CSV upload failed: {resp.text}"
+    data = resp.json()
+    assert data["total_ingested"] == 2
+    assert len(data["results"]) == 2
+    assert data["results"][0]["account_number"] == "ACC-CSV-TEST-1"
+    assert data["results"][1]["account_number"] == "ACC-CSV-TEST-2"
+
+
