@@ -12,7 +12,21 @@ export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const from = location.state?.from?.pathname || '/alerts';
+
+  const getRedirectPath = (userRole) => {
+    if (location.state?.from?.pathname) {
+      const p = location.state.from.pathname + (location.state.from.search || '');
+      return p;
+    }
+    const saved = localStorage.getItem('fraud_last_visited');
+    if (saved && saved !== '/' && !saved.startsWith('/login')) {
+      if (saved.startsWith('/dashboard') && userRole === 'analyst') {
+        return '/alerts';
+      }
+      return saved;
+    }
+    return userRole === 'manager' || userRole === 'admin' ? '/dashboard' : '/alerts';
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -20,8 +34,9 @@ export default function Login() {
     setLoading(true);
 
     try {
-      await login(username, password);
-      navigate(from, { replace: true });
+      const loggedUser = await login(username, password);
+      const target = getRedirectPath(loggedUser?.role);
+      navigate(target, { replace: true });
     } catch (err) {
       setError(err.message || 'Login failed. Please verify credentials.');
     } finally {

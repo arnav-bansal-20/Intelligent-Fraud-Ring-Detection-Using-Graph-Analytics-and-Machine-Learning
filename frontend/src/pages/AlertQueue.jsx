@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import {
   BellRing,
@@ -11,14 +12,19 @@ import {
   ShieldAlert,
   Search,
   ExternalLink,
-  ChevronRight
+  ChevronRight,
+  RefreshCw
 } from 'lucide-react';
 
 export default function AlertQueue() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+
+  const initialStatus = searchParams.get('status') || localStorage.getItem('alert_status_filter') || 'open';
+  const [statusFilter, setStatusFilter] = useState(initialStatus);
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [statusFilter, setStatusFilter] = useState('open');
   const [searchTerm, setSearchTerm] = useState('');
 
   // Selected alert for investigation drawer
@@ -30,6 +36,25 @@ export default function AlertQueue() {
     note: ''
   });
   const [submitting, setSubmitting] = useState(false);
+
+  // Sync with searchParams if navigated from external link (e.g. Manager Dashboard)
+  useEffect(() => {
+    const urlStatus = searchParams.get('status');
+    if (urlStatus && urlStatus !== statusFilter) {
+      setStatusFilter(urlStatus);
+      localStorage.setItem('alert_status_filter', urlStatus);
+    }
+  }, [searchParams]);
+
+  const handleStatusFilterChange = (newStatus) => {
+    setStatusFilter(newStatus);
+    localStorage.setItem('alert_status_filter', newStatus);
+    if (newStatus && newStatus !== 'ALL') {
+      setSearchParams({ status: newStatus });
+    } else {
+      setSearchParams({});
+    }
+  };
 
   const fetchAlerts = async () => {
     setLoading(true);
@@ -131,7 +156,7 @@ export default function AlertQueue() {
             {['open', 'reviewing', 'closed', 'ALL'].map((st) => (
               <button
                 key={st}
-                onClick={() => setStatusFilter(st)}
+                onClick={() => handleStatusFilterChange(st)}
                 style={{
                   padding: '6px 14px',
                   borderRadius: '6px',
@@ -186,13 +211,13 @@ export default function AlertQueue() {
                       <div style={{ fontSize: '0.8rem', maxWidth: '380px', margin: '0 auto 16px' }}>
                         Alerts are dynamically generated when company transactions are evaluated as High Risk (probability ≥ 70%).
                       </div>
-                      <a
-                        href="/score"
+                      <button
+                        onClick={() => navigate('/score')}
                         className="btn btn-primary"
-                        style={{ display: 'inline-block', padding: '8px 16px', fontSize: '0.82rem', textDecoration: 'none' }}
+                        style={{ display: 'inline-block', padding: '8px 16px', fontSize: '0.82rem', cursor: 'pointer' }}
                       >
                         Add & Analyze Company Transactions
-                      </a>
+                      </button>
                     </td>
                   </tr>
                 ) : (
@@ -281,9 +306,11 @@ export default function AlertQueue() {
 
             {/* 1-Click Ring Inspection Link */}
             <div style={{ marginBottom: '18px' }}>
-              <a
-                href={`/rings?account=${selectedAlert.account_id}`}
+              <button
+                type="button"
+                onClick={() => navigate(`/rings?account=${selectedAlert.account_id}`)}
                 style={{
+                  width: '100%',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
@@ -292,7 +319,7 @@ export default function AlertQueue() {
                   border: '1px solid #ddd6fe',
                   borderRadius: '8px',
                   color: '#6d28d9',
-                  textDecoration: 'none',
+                  cursor: 'pointer',
                   fontSize: '0.82rem',
                   fontWeight: 600
                 }}
@@ -302,7 +329,7 @@ export default function AlertQueue() {
                   <span>Inspect Account Syndicate Ring (Cytoscape)</span>
                 </div>
                 <ChevronRight size={16} />
-              </a>
+              </button>
             </div>
 
             {/* Determination & Decision Form */}

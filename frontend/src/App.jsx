@@ -1,6 +1,6 @@
-import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider } from './context/AuthContext';
+import React, { useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Navbar from './components/Navbar';
 
@@ -21,10 +21,45 @@ function AppLayout({ children }) {
   );
 }
 
+// Automatically tracks the last visited path & search parameters in localStorage
+function RouteTracker() {
+  const location = useLocation();
+
+  useEffect(() => {
+    if (location.pathname && location.pathname !== '/login') {
+      const fullPath = location.pathname + (location.search || '');
+      localStorage.setItem('fraud_last_visited', fullPath);
+    }
+  }, [location]);
+
+  return null;
+}
+
+// Redirects to where the user left off, or to appropriate home route
+function RootRedirect() {
+  const { user } = useAuth();
+  const lastVisited = localStorage.getItem('fraud_last_visited');
+
+  if (lastVisited && lastVisited !== '/' && !lastVisited.startsWith('/login')) {
+    // If last visited was dashboard, make sure analyst is not restricted
+    if (lastVisited.startsWith('/dashboard') && user && user.role === 'analyst') {
+      return <Navigate to="/alerts" replace />;
+    }
+    return <Navigate to={lastVisited} replace />;
+  }
+
+  if (user && (user.role === 'manager' || user.role === 'admin')) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return <Navigate to="/alerts" replace />;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
+        <RouteTracker />
         <Routes>
           <Route path="/login" element={<Login />} />
 
@@ -72,8 +107,9 @@ export default function App() {
             }
           />
 
-          {/* Fallback route */}
-          <Route path="*" element={<Navigate to="/alerts" replace />} />
+          {/* Root & Fallback routes remember where user left off */}
+          <Route path="/" element={<RootRedirect />} />
+          <Route path="*" element={<RootRedirect />} />
         </Routes>
       </AuthProvider>
     </BrowserRouter>

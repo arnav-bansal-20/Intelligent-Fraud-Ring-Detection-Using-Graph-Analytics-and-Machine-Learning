@@ -26,8 +26,16 @@ import {
 } from 'lucide-react';
 
 export default function ScoreTransaction() {
-  const [activeTab, setActiveTab] = useState('single'); // 'single' | 'batch' | 'history'
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabFromUrl = searchParams.get('tab');
+  const savedTab = localStorage.getItem('score_active_tab') || 'single';
+  const [activeTab, setActiveTab] = useState(tabFromUrl || savedTab);
+
+  const switchTab = (tab) => {
+    setActiveTab(tab);
+    localStorage.setItem('score_active_tab', tab);
+    setSearchParams({ tab });
+  };
 
   // File upload state
   const fileInputRef = useRef(null);
@@ -306,7 +314,7 @@ export default function ScoreTransaction() {
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '12px', marginBottom: '24px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
         <button
-          onClick={() => { setActiveTab('single'); setError(''); setSuccessMsg(''); }}
+          onClick={() => switchTab('single')}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -327,7 +335,7 @@ export default function ScoreTransaction() {
         </button>
 
         <button
-          onClick={() => { setActiveTab('batch'); setError(''); setSuccessMsg(''); }}
+          onClick={() => switchTab('batch')}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -348,7 +356,7 @@ export default function ScoreTransaction() {
         </button>
 
         <button
-          onClick={() => { setActiveTab('history'); setError(''); setSuccessMsg(''); }}
+          onClick={() => switchTab('history')}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -1028,7 +1036,7 @@ export default function ScoreTransaction() {
                 Add a single transaction in Tab 1 or click below to import a realistic demo bank batch to run AI fraud screening.
               </p>
               <button
-                onClick={() => { setActiveTab('batch'); handleLoadDemoBatch(); }}
+                onClick={() => { switchTab('batch'); handleLoadDemoBatch(); }}
                 className="btn btn-primary"
                 style={{ padding: '8px 16px', fontSize: '0.85rem' }}
               >

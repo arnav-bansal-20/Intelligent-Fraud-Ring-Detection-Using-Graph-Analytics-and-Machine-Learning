@@ -176,6 +176,10 @@ class ModelMetrics(BaseModel):
     roc_auc: float
     threshold: Optional[float] = None
     tradeoff_explanation: str
+    confusion_matrix: Optional[Dict[str, int]] = None
+    precision_at_recall_50: Optional[float] = None
+    precision_at_recall_70: Optional[float] = None
+    accuracy: Optional[float] = None
 
 class DashboardMetricsResponse(BaseModel):
     open_alerts: int
@@ -184,6 +188,8 @@ class DashboardMetricsResponse(BaseModel):
     total_alerts: int
     total_transactions: int
     fraud_transactions: int
+    predicted_fraud_transactions: int = 0
+    ai_fraud_rate_pct: float = 0.0
     portfolio_fraud_rate_pct: float
     model_metrics: ModelMetrics
     decisions_breakdown: Dict[str, int]

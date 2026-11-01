@@ -17,10 +17,11 @@ import {
 
 export default function RingExplorer() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialAccountId = searchParams.get('account') || '1';
+  const initialAccountId = searchParams.get('account') || localStorage.getItem('ring_account_id') || '1';
+  const initialHops = searchParams.get('hops') ? parseInt(searchParams.get('hops')) : parseInt(localStorage.getItem('ring_hops') || '1');
 
   const [accountId, setAccountId] = useState(initialAccountId);
-  const [hops, setHops] = useState(1);
+  const [hops, setHops] = useState(initialHops);
   const [graphData, setGraphData] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -44,9 +45,20 @@ export default function RingExplorer() {
     }
   };
 
+  // React to URL search params or restore from last visited state
   useEffect(() => {
-    loadRing(accountId, hops);
-  }, []);
+    const paramAcc = searchParams.get('account');
+    const paramHops = searchParams.get('hops');
+    const targetAcc = paramAcc || localStorage.getItem('ring_account_id') || '1';
+    const targetHops = paramHops ? parseInt(paramHops) : parseInt(localStorage.getItem('ring_hops') || '1');
+
+    setAccountId(targetAcc);
+    setHops(targetHops);
+    localStorage.setItem('ring_account_id', targetAcc);
+    localStorage.setItem('ring_hops', String(targetHops));
+
+    loadRing(targetAcc, targetHops);
+  }, [searchParams]);
 
   // Initialize and update Cytoscape instance when graphData changes
   useEffect(() => {
@@ -78,8 +90,8 @@ export default function RingExplorer() {
     const cy = cytoscape({
       container: containerRef.current,
       elements,
-      wheelSensitivity: 0.08, // Significantly reduces trackpad zoom sensitivity to prevent graph vanishing
-      minZoom: 0.35,          // Hard lower bound: graph can never shrink to an invisible dot
+      wheelSensitivity: 0.018, // Ultra-smooth trackpad zoom to prevent runaway zoom/vanishing
+      minZoom: 0.4,           // Hard lower bound: graph can never shrink to an invisible dot
       maxZoom: 2.2,           // Hard upper bound: prevents zooming into empty space
       boxSelectionEnabled: false,
       style: [
@@ -152,12 +164,56 @@ export default function RingExplorer() {
         levelWidth: () => 2,
         padding: 50,
         animate: true,
-        animationDuration: 500,
+        animationDuration: 400,
         fit: true
       }
     });
 
+    // Viewport containment: clamp panning so the graph never disappears off-screen
+    const clampViewport = () => {
+      if (!cy || cy.elements().length === 0) return;
+      const bb = cy.elements().renderedBoundingBox();
+      const w = cy.width();
+      const h = cy.height();
+      const pad = 60;
+
+      let pan = cy.pan();
+      let adjusted = false;
+
+      if (bb.x1 > w - pad) {
+        pan.x -= (bb.x1 - (w - pad));
+        adjusted = true;
+      }
+      if (bb.x2 < pad) {
+        pan.x += (pad - bb.x2);
+        adjusted = true;
+      }
+      if (bb.y1 > h - pad) {
+        pan.y -= (bb.y1 - (h - pad));
+        adjusted = true;
+      }
+      if (bb.y2 < pad) {
+        pan.y += (pad - bb.y2);
+        adjusted = true;
+      }
+
+      if (adjusted) {
+        cy.pan(pan);
+      }
+    };
+
+    cy.on('pan', clampViewport);
+
+    // Double-click background to fit and center
+    cy.on('dbltap', (evt) => {
+      if (evt.target === cy) {
+        cy.fit(undefined, 50);
+        cy.center();
+      }
+    });
+
     cy.on('layoutstop', () => {
+      cy.resize();
       cy.fit(undefined, 50);
       cy.center();
     });
@@ -173,23 +229,42 @@ export default function RingExplorer() {
       }
     });
 
+    // Resize listener for window changes
+    const onResize = () => {
+      if (cy) cy.resize();
+    };
+    window.addEventListener('resize', onResize);
+
+    // Initial settle
+    const settleTimer = setTimeout(() => {
+      if (cy) {
+        cy.resize();
+        cy.fit(undefined, 50);
+        cy.center();
+      }
+    }, 100);
+
     cyRef.current = cy;
 
     return () => {
+      clearTimeout(settleTimer);
+      window.removeEventListener('resize', onResize);
       if (cyRef.current) cyRef.current.destroy();
     };
   }, [graphData]);
 
   const handleSearch = (e) => {
-    e.preventDefault();
-    setSearchParams({ account: accountId });
+    if (e) e.preventDefault();
+    localStorage.setItem('ring_account_id', accountId);
+    localStorage.setItem('ring_hops', String(hops));
+    setSearchParams({ account: accountId, hops: String(hops) });
     loadRing(accountId, hops);
   };
 
   const handleZoom = (factor) => {
     if (cyRef.current) {
       const cy = cyRef.current;
-      const targetZoom = Math.min(Math.max(cy.zoom() * factor, 0.35), 2.2);
+      const targetZoom = Math.min(Math.max(cy.zoom() * factor, 0.4), 2.2);
       cy.zoom({
         level: targetZoom,
         renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 }
@@ -199,8 +274,12 @@ export default function RingExplorer() {
 
   const handleFit = () => {
     if (cyRef.current) {
-      cyRef.current.fit(undefined, 50);
-      cyRef.current.center();
+      cyRef.current.stop();
+      cyRef.current.resize();
+      cyRef.current.animate({
+        fit: { eles: cyRef.current.elements(), padding: 50 },
+        duration: 300
+      });
     }
   };
 
@@ -386,10 +465,10 @@ export default function RingExplorer() {
               fontSize: '0.78rem',
               fontWeight: 600
             }}
-            title="Fit to Screen & Center View"
+            title="Fit to Screen & Center View (or double-click canvas)"
           >
             <Maximize2 size={14} />
-            Reset View (Fit)
+            <span>Center View</span>
           </button>
         </div>
 

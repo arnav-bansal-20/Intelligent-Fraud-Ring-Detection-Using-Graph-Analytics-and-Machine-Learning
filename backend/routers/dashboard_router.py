@@ -2,11 +2,12 @@ import os
 import sys
 import json
 import subprocess
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from typing import List, Dict
 from backend.schemas import DashboardMetricsResponse, ModelMetrics, BenchmarkHopResult
 from backend.auth import require_roles
-from backend.database import get_pg_connection
+from backend.database import get_db
 
 router = APIRouter(prefix="/dashboard", tags=["Manager Dashboard"])
 
@@ -25,6 +26,10 @@ def load_deployed_model_metrics() -> ModelMetrics:
             pr_auc = float(mb.get("pr_auc", 0.4777))
             roc_auc = float(mb.get("roc_auc", 0.9796))
             thresh = float(mb.get("threshold", 0.9735))
+            cm = mb.get("confusion_matrix")
+            p50 = float(mb.get("precision_at_recall_50", 0.5011))
+            p70 = float(mb.get("precision_at_recall_70", 0.2282))
+            acc = float(mb.get("accuracy", 0.9966))
             return ModelMetrics(
                 precision=prec,
                 recall=rec,
@@ -32,6 +37,10 @@ def load_deployed_model_metrics() -> ModelMetrics:
                 pr_auc=pr_auc,
                 roc_auc=roc_auc,
                 threshold=thresh,
+                confusion_matrix=cm,
+                precision_at_recall_50=p50,
+                precision_at_recall_70=p70,
+                accuracy=acc,
                 tradeoff_explanation=(
                     f"Deployed Model B (XGBoost with transaction and causal graph features) operates at a decision "
                     f"threshold of {thresh:.4f} calibrated on the validation set. On the held-out chronological test split, "
@@ -48,18 +57,24 @@ def load_deployed_model_metrics() -> ModelMetrics:
         pr_auc=0.4777,
         roc_auc=0.9796,
         threshold=0.9735,
+        confusion_matrix={"tp": 471, "fp": 494, "fn": 453, "tn": 276442},
+        precision_at_recall_50=0.5011,
+        precision_at_recall_70=0.2282,
+        accuracy=0.9966,
         tradeoff_explanation=(
             "Deployed Model B operates at decision threshold 0.9735, achieving 48.81% Precision and 50.97% Recall on the held-out test split."
         )
     )
 
 @router.get("/metrics", response_model=DashboardMetricsResponse)
-def get_dashboard_metrics(current_user: dict = Depends(require_roles(["manager", "admin"]))):
+def get_dashboard_metrics(
+    conn = Depends(get_db),
+    current_user: dict = Depends(require_roles(["manager", "admin"]))
+):
     """
     Manager dashboard metrics: open alerts, fraud rate, model metrics (precision, recall, F1, PR-AUC).
     Restricted to manager and admin roles.
     """
-    conn = get_pg_connection()
     cur = conn.cursor()
 
     # 1. Alert Status Counts (Company transactions only)
@@ -95,17 +110,20 @@ def get_dashboard_metrics(current_user: dict = Depends(require_roles(["manager",
     cur.execute("""
         SELECT
             COUNT(*) as total_tx,
-            SUM(CASE WHEN is_fraud = true THEN 1 ELSE 0 END) as fraud_tx
+            SUM(CASE WHEN is_fraud = true THEN 1 ELSE 0 END) as fraud_tx,
+            SUM(CASE WHEN predicted_fraud = true THEN 1 ELSE 0 END) as predicted_fraud_tx
         FROM transaction
         WHERE source = 'company';
     """)
     tx_stats = cur.fetchone()
     total_tx = tx_stats["total_tx"] if tx_stats and tx_stats["total_tx"] else 0
     fraud_tx = tx_stats["fraud_tx"] if tx_stats and tx_stats["fraud_tx"] else 0
+    predicted_fraud_tx = tx_stats["predicted_fraud_tx"] if tx_stats and tx_stats["predicted_fraud_tx"] else 0
+
     fraud_rate_pct = round((fraud_tx / total_tx) * 100, 2) if total_tx > 0 else 0.0
+    ai_fraud_rate_pct = round((predicted_fraud_tx / total_tx) * 100, 2) if total_tx > 0 else 0.0
 
     cur.close()
-    conn.close()
 
     # 4. Deployed XGBoost Model Metrics (from models/metrics.json)
     model_metrics = load_deployed_model_metrics()
@@ -117,6 +135,8 @@ def get_dashboard_metrics(current_user: dict = Depends(require_roles(["manager",
         total_alerts=total_alerts,
         total_transactions=total_tx,
         fraud_transactions=fraud_tx,
+        predicted_fraud_transactions=predicted_fraud_tx,
+        ai_fraud_rate_pct=ai_fraud_rate_pct,
         portfolio_fraud_rate_pct=fraud_rate_pct,
         model_metrics=model_metrics,
         decisions_breakdown=decisions_breakdown,
@@ -126,6 +146,20 @@ def get_dashboard_metrics(current_user: dict = Depends(require_roles(["manager",
             "closed": closed_alerts
         }
     )
+
+@router.get("/plots/pr-curve")
+def get_pr_curve_plot(current_user: dict = Depends(require_roles(["manager", "admin"]))):
+    pr_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "precision_recall_curve.png"))
+    if os.path.exists(pr_path):
+        return FileResponse(pr_path, media_type="image/png")
+    raise HTTPException(status_code=404, detail="PR curve plot not found")
+
+@router.get("/plots/feature-importance")
+def get_feature_importance_plot(current_user: dict = Depends(require_roles(["manager", "admin"]))):
+    fi_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "feature_importance.png"))
+    if os.path.exists(fi_path):
+        return FileResponse(fi_path, media_type="image/png")
+    raise HTTPException(status_code=404, detail="Feature importance plot not found")
 
 @router.get("/benchmarks", response_model=List[BenchmarkHopResult])
 def get_benchmark_results(current_user: dict = Depends(require_roles(["manager", "admin"]))):

@@ -154,12 +154,12 @@ def score_transaction(
             contribution_level="Baseline"
         ))
 
-    # 5. Save Alert if requested and risk is High
+    # 5. Save Alert if requested or if risk is High
     alert_created = False
     alert_id = None
     iso_time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
 
-    if req.save_alert and risk_label == "High":
+    if req.save_alert or risk_label == "High":
         # Create transaction row with source='company', predicted_fraud, fraud_probability, is_fraud=False
         cur.execute("""
             INSERT INTO transaction (account_id, merchant_id, trans_num, amount, txn_timestamp, source, predicted_fraud, fraud_probability, is_fraud)
