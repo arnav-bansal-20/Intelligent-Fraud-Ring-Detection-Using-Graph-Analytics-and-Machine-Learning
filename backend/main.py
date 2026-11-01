@@ -21,13 +21,16 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# Configure CORS strictly for Vite dev origin from .env
+# Configure CORS strictly for Vite dev and host origins from .env
 origins = [origin.strip() for origin in CORS_ORIGIN.split(",") if origin.strip()]
-# Always allow local dev origins
-if "http://localhost:5173" not in origins:
-    origins.append("http://localhost:5173")
-if "http://127.0.0.1:5173" not in origins:
-    origins.append("http://127.0.0.1:5173")
+for default_origin in [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8005",
+    "http://127.0.0.1:8005",
+]:
+    if default_origin not in origins:
+        origins.append(default_origin)
 
 app.add_middleware(
     CORSMiddleware,
