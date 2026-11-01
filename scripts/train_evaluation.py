@@ -529,7 +529,7 @@ def main():
         pd.to_datetime(df_train["unix_time"].max(), unit="s").strftime("%Y-%m-%d %H:%M:%S")
     )
     
-    # 1. Primary Model Bundle (Model B)
+    # 1. Primary Model Bundle (Model B - Production)
     bundle_primary = {
         "model": xgb_hybrid,
         "feature_cols": features_graph_full,
@@ -541,7 +541,6 @@ def main():
         "model_type": "XGBoost (Graph-Augmented Model B)"
     }
     joblib.dump(bundle_primary, os.path.join(MODELS_DIR, "fraud_model.joblib"))
-    joblib.dump(bundle_primary, os.path.join(MODELS_DIR, "model_hybrid.joblib"))
     
     # 2. Baseline Model Bundle (Model A)
     bundle_baseline = {
