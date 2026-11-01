@@ -11,20 +11,24 @@ from backend.schemas import (
 from backend.auth import get_current_user
 from backend.database import get_db, get_mongo_db, get_known_fraud_accounts
 from backend.features import compute_transaction_features
-from backend.config import MODEL_PATH
+from backend.config import MODEL_PATH, MODEL_A_PATH, MODEL_B_PATH
 
 router = APIRouter(prefix="/score", tags=["Transaction Scoring"])
 
-# Cache model bundle in memory
-_model_bundle = None
+# Cache model bundles in memory
+_cached_models = {}
 
-def get_model():
-    global _model_bundle
-    if _model_bundle is None:
-        if not os.path.exists(MODEL_PATH):
-            raise RuntimeError(f"Trained model not found at {MODEL_PATH}")
-        _model_bundle = joblib.load(MODEL_PATH)
-    return _model_bundle
+def get_model(choice: str = "model_b"):
+    choice = (choice or "model_b").lower()
+    if choice not in _cached_models:
+        if choice in ["model_a", "baseline", "a"]:
+            path = MODEL_A_PATH if os.path.exists(MODEL_A_PATH) else MODEL_PATH
+        else:
+            path = MODEL_B_PATH if os.path.exists(MODEL_B_PATH) else MODEL_PATH
+        if not os.path.exists(path):
+            path = MODEL_PATH
+        _cached_models[choice] = joblib.load(path)
+    return _cached_models[choice]
 
 @router.post("", response_model=TransactionScoreResponse)
 def score_transaction(
@@ -33,13 +37,15 @@ def score_transaction(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Score a transaction using the trained XGBoost model and dynamic MongoDB graph features.
+    Score a transaction using the chosen trained XGBoost model (Model B: Graph Hybrid or Model A: Baseline Tx Only).
     Computes graph features, predicts fraud probability, assigns risk label based on calibrated threshold,
     and returns feature contribution reasons for decision support.
     """
-    bundle = get_model()
+    model_choice = (req.model_choice or "model_b").lower()
+    bundle = get_model(model_choice)
     model = bundle["model"]
     feature_cols = bundle["feature_cols"]
+    model_name = bundle.get("model_type") or ("XGBoost (Model A - Tx Only)" if "model_a" in model_choice else "XGBoost (Model B - Tx + Graph)")
 
     # Decision thresholds: calibrated threshold for High, 0.5 * threshold for Medium
     high_threshold = float(bundle.get("threshold", 0.9735))
@@ -202,6 +208,7 @@ def score_transaction(
         graph_features=feature_dict,
         alert_created=alert_created,
         alert_id=alert_id,
+        model_used=model_name,
         evaluated_at=datetime.now(timezone.utc).isoformat()
     )
 

@@ -28,6 +28,7 @@ class TransactionScoreRequest(BaseModel):
     amount: float = Field(..., gt=0, description="Transaction amount in USD")
     txn_timestamp: Optional[str] = Field(None, description="ISO timestamp (defaults to current time)")
     save_alert: Optional[bool] = Field(True, description="Whether to create an alert if risk is High")
+    model_choice: Optional[str] = Field("model_b", description="AI model to score with: 'model_b' (Graph Hybrid) or 'model_a' (Baseline Tx Only)")
 
 # ------------------------------------------------------------------------------
 # Company / Bank Transactions & AI Analysis
@@ -86,6 +87,7 @@ class TransactionScoreResponse(BaseModel):
     graph_features: Dict[str, Any]
     alert_created: bool = False
     alert_id: Optional[int] = None
+    model_used: Optional[str] = "XGBoost (Model B - Tx + Graph)"
     evaluated_at: str
 
 class SampleTransactionOption(BaseModel):
@@ -169,6 +171,7 @@ class RingExplorerResponse(BaseModel):
 # Dashboard & Benchmarks
 # ------------------------------------------------------------------------------
 class ModelMetrics(BaseModel):
+    model_name: Optional[str] = None
     precision: float
     recall: float
     f1_score: float
@@ -192,6 +195,8 @@ class DashboardMetricsResponse(BaseModel):
     ai_fraud_rate_pct: float = 0.0
     portfolio_fraud_rate_pct: float
     model_metrics: ModelMetrics
+    baseline_model_metrics: Optional[ModelMetrics] = None
+    models_comparison: Optional[List[Dict[str, Any]]] = None
     decisions_breakdown: Dict[str, int]
     status_breakdown: Dict[str, int]
 

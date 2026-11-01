@@ -541,6 +541,7 @@ def main():
         "model_type": "XGBoost (Graph-Augmented Model B)"
     }
     joblib.dump(bundle_primary, os.path.join(MODELS_DIR, "fraud_model.joblib"))
+    joblib.dump(bundle_primary, os.path.join(MODELS_DIR, "model_hybrid.joblib"))
     
     # 2. Baseline Model Bundle (Model A)
     bundle_baseline = {

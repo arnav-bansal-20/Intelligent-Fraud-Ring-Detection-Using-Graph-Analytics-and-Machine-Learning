@@ -55,6 +55,7 @@ export default function ScoreTransaction() {
     notes: ''
   });
 
+  const [selectedModel, setSelectedModel] = useState('model_b'); // 'model_b' | 'model_a'
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
@@ -105,7 +106,8 @@ export default function ScoreTransaction() {
         merchant_name: formData.merchant_name.trim(),
         amount: parseFloat(formData.amount),
         txn_timestamp: formData.txn_timestamp,
-        notes: formData.notes.trim() || undefined
+        notes: formData.notes.trim() || undefined,
+        model_choice: selectedModel
       };
 
       const res = await api.createCompanyTransaction(payload);
@@ -492,6 +494,50 @@ export default function ScoreTransaction() {
                 />
               </div>
 
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                  AI Decision Engine Model
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedModel('model_b')}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: '6px',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      background: selectedModel === 'model_b' ? '#eff6ff' : '#ffffff',
+                      border: selectedModel === 'model_b' ? '1.5px solid #2563eb' : '1px solid var(--border-color)',
+                      color: selectedModel === 'model_b' ? '#1d4ed8' : 'var(--text-main)'
+                    }}
+                  >
+                    <div style={{ fontWeight: 700 }}>★ Model B (Graph Hybrid)</div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)', marginTop: '2px' }}>Tx + Multi-Hop Graph Features</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedModel('model_a')}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: '6px',
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      background: selectedModel === 'model_a' ? '#eff6ff' : '#ffffff',
+                      border: selectedModel === 'model_a' ? '1.5px solid #2563eb' : '1px solid var(--border-color)',
+                      color: selectedModel === 'model_a' ? '#1d4ed8' : 'var(--text-main)'
+                    }}
+                  >
+                    <div style={{ fontWeight: 700 }}>Model A (Baseline Tx)</div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)', marginTop: '2px' }}>Flat Tabular Ingestion (Tx Only)</div>
+                  </button>
+                </div>
+              </div>
+
               <button
                 type="submit"
                 disabled={loading}
@@ -507,7 +553,7 @@ export default function ScoreTransaction() {
                   marginTop: '8px'
                 }}
               >
-                {loading ? 'Evaluating AI Model & Graph...' : 'Save Record & Run AI Analysis'}
+                {loading ? 'Evaluating AI Model & Graph...' : `Save Record & Run ${selectedModel === 'model_a' ? 'Model A' : 'Model B'} Analysis`}
               </button>
             </form>
           </div>
@@ -517,9 +563,12 @@ export default function ScoreTransaction() {
             <div className="card" style={{ padding: '24px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                     <span className={`badge ${result.risk_label === 'High' ? 'badge-danger' : result.risk_label === 'Medium' ? 'badge-warning' : 'badge-success'}`}>
                       {result.risk_label} Risk
+                    </span>
+                    <span className="badge badge-purple">
+                      {selectedModel === 'model_a' ? 'Model A (Baseline Tx)' : 'Model B (Graph-Augmented)'}
                     </span>
                     <span className="mono" style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
                       #{result.trans_num}

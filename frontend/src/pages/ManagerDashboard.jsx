@@ -43,6 +43,7 @@ export default function ManagerDashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [modelTab, setModelTab] = useState('model_b'); // 'model_b' | 'model_a' | 'comparison'
   const [activePlotModal, setActivePlotModal] = useState(null); // 'pr' | 'features' | null
   const navigate = useNavigate();
 
@@ -102,7 +103,13 @@ export default function ManagerDashboard() {
     { name: 'Closed (Resolved)', value: metrics?.closed_alerts || 0, status: 'closed' }
   ];
 
-  const confMatrix = metrics?.model_metrics?.confusion_matrix || { tn: 368737, fp: 1111, fn: 1046, tp: 1089 };
+  const activeModel = modelTab === 'model_a'
+    ? (metrics?.baseline_model_metrics || metrics?.model_metrics)
+    : metrics?.model_metrics;
+
+  const confMatrix = activeModel?.confusion_matrix || (modelTab === 'model_a'
+    ? { tn: 276284, fp: 652, fn: 409, tp: 515 }
+    : { tn: 276442, fp: 494, fn: 453, tp: 471 });
 
   return (
     <div style={{ maxWidth: '1440px', margin: '0 auto', padding: '24px' }}>
@@ -111,7 +118,7 @@ export default function ManagerDashboard() {
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span className="badge badge-purple" style={{ textTransform: 'uppercase' }}>Executive View</span>
-            <span className="badge badge-success">Production Model v2 (XGBoost)</span>
+            <span className="badge badge-success">Dual AI Models: Model A (Baseline) & Model B (Graph-Augmented)</span>
           </div>
           <h1 style={{ fontSize: '1.4rem', fontWeight: 800, color: 'var(--text-main)', marginTop: '6px' }}>
             Manager Dashboard: Company Fraud Governance & Latency
@@ -283,16 +290,16 @@ export default function ManagerDashboard() {
         </div>
       </div>
 
-      {/* Model Performance & Precision-Recall Scorecard */}
+      {/* Dual Model Governance & Comparative Scorecard */}
       <div className="card" style={{ padding: '24px', marginBottom: '24px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '18px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px', marginBottom: '16px' }}>
           <div>
             <h2 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <TrendingUp size={20} color="#2563eb" />
-              Pre-Trained AI Classifier Governance (Trained on 1.85M Historical Dataset)
+              Machine Learning Model Governance & Comparative Evaluation
             </h2>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-              Chronological benchmark metrics evaluated on historical test set. Operates as the decision engine for screening company transactions.
+              Chronological benchmark metrics evaluated on 371,983 held-out test transactions. Toggle models to inspect governance differences.
             </p>
           </div>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -337,143 +344,287 @@ export default function ManagerDashboard() {
           </div>
         </div>
 
-        {/* 6 Headline Metrics */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '18px' }}>
-          <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 600 }}>Precision</span>
-            <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#059669', margin: '4px 0' }}>
-              {(metrics?.model_metrics?.precision * 100).toFixed(2)}%
-            </div>
-            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Low false positive alerts</span>
-          </div>
+        {/* Model Tabs: Model B (Production) vs Model A (Baseline) vs Full Comparison */}
+        <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => setModelTab('model_b')}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '8px',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              background: modelTab === 'model_b' ? '#eff6ff' : '#ffffff',
+              color: modelTab === 'model_b' ? '#1d4ed8' : 'var(--text-muted)',
+              border: modelTab === 'model_b' ? '1.5px solid #3b82f6' : '1px solid var(--border-color)',
+              boxShadow: modelTab === 'model_b' ? '0 1px 3px rgba(37,99,235,0.1)' : 'none'
+            }}
+          >
+            ★ Model B: Graph-Augmented XGBoost (Production Deployed)
+          </button>
 
-          <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 600 }}>Recall</span>
-            <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#d97706', margin: '4px 0' }}>
-              {(metrics?.model_metrics?.recall * 100).toFixed(2)}%
-            </div>
-            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Focused syndicate coverage</span>
-          </div>
+          <button
+            onClick={() => setModelTab('model_a')}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '8px',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              background: modelTab === 'model_a' ? '#eff6ff' : '#ffffff',
+              color: modelTab === 'model_a' ? '#1d4ed8' : 'var(--text-muted)',
+              border: modelTab === 'model_a' ? '1.5px solid #3b82f6' : '1px solid var(--border-color)',
+              boxShadow: modelTab === 'model_a' ? '0 1px 3px rgba(37,99,235,0.1)' : 'none'
+            }}
+          >
+            Model A: Transaction Baseline XGBoost (Tx Features Only)
+          </button>
 
-          <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 600 }}>F1-Score</span>
-            <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#2563eb', margin: '4px 0' }}>
-              {(metrics?.model_metrics?.f1_score * 100).toFixed(2)}%
-            </div>
-            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Harmonic balance</span>
-          </div>
-
-          <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 600 }}>PR-AUC</span>
-            <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#7c3aed', margin: '4px 0' }}>
-              {(metrics?.model_metrics?.pr_auc * 100).toFixed(2)}%
-            </div>
-            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Area under Precision-Recall</span>
-          </div>
-
-          <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 600 }}>ROC-AUC</span>
-            <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#0284c7', margin: '4px 0' }}>
-              {(metrics?.model_metrics?.roc_auc * 100).toFixed(2)}%
-            </div>
-            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>High discrimination power</span>
-          </div>
-
-          <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 600 }}>Decision Threshold</span>
-            <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#475569', margin: '4px 0' }}>
-              {metrics?.model_metrics?.threshold ? metrics.model_metrics.threshold.toFixed(4) : '0.9735'}
-            </div>
-            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Calibrated validation cut-off</span>
-          </div>
+          <button
+            onClick={() => setModelTab('comparison')}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '8px',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              background: modelTab === 'comparison' ? '#eff6ff' : '#ffffff',
+              color: modelTab === 'comparison' ? '#1d4ed8' : 'var(--text-muted)',
+              border: modelTab === 'comparison' ? '1.5px solid #3b82f6' : '1px solid var(--border-color)',
+              boxShadow: modelTab === 'comparison' ? '0 1px 3px rgba(37,99,235,0.1)' : 'none'
+            }}
+          >
+            Side-by-Side Model Comparison (All 6 Evaluated Models)
+          </button>
         </div>
 
-        {/* Confusion Matrix & Calibration Detail */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px', marginBottom: '18px' }}>
-          {/* Confusion Matrix Table */}
-          <div style={{ background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-              <strong style={{ fontSize: '0.85rem', color: 'var(--text-main)' }}>Hold-Out Test Set Confusion Matrix (371,983 Txns)</strong>
-              <span className="badge badge-blue">Threshold: {metrics?.model_metrics?.threshold?.toFixed(4) || '0.9735'}</span>
-            </div>
-            <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', textAlign: 'center' }}>
-              <thead>
-                <tr style={{ background: '#f8fafc', borderBottom: '1px solid var(--border-color)' }}>
-                  <th style={{ padding: '8px', textAlign: 'left' }}>Ground Truth</th>
-                  <th style={{ padding: '8px', color: '#059669' }}>Pred Legitimate</th>
-                  <th style={{ padding: '8px', color: '#dc2626' }}>Pred Fraud</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td style={{ padding: '8px', textAlign: 'left', fontWeight: 600 }}>Actual Legitimate</td>
-                  <td style={{ padding: '8px', background: '#ecfdf5', color: '#065f46', fontWeight: 700 }}>
-                    {confMatrix.tn?.toLocaleString()} (TN)
-                  </td>
-                  <td style={{ padding: '8px', background: '#fef2f2', color: '#991b1b', fontWeight: 600 }}>
-                    {confMatrix.fp?.toLocaleString()} (FP)
-                  </td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '8px', textAlign: 'left', fontWeight: 600 }}>Actual Fraud</td>
-                  <td style={{ padding: '8px', background: '#fffbeb', color: '#92400e', fontWeight: 600 }}>
-                    {confMatrix.fn?.toLocaleString()} (FN)
-                  </td>
-                  <td style={{ padding: '8px', background: '#ecfdf5', color: '#065f46', fontWeight: 700 }}>
-                    {confMatrix.tp?.toLocaleString()} (TP)
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          {/* Precision at Operating Recall Points */}
-          <div style={{ background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-            <strong style={{ fontSize: '0.85rem', color: 'var(--text-main)', marginBottom: '10px' }}>
-              Operational Precision at Fixed Recall Points
-            </strong>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
-                <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>At 50% Recall</span>
-                <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#059669', margin: '4px 0' }}>
-                  {metrics?.model_metrics?.precision_at_recall_50 ? (metrics.model_metrics.precision_at_recall_50 * 100).toFixed(1) + '%' : '98.5%'}
-                </div>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Near-zero false alarms</span>
-              </div>
-              <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
-                <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>At 70% Recall</span>
-                <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#2563eb', margin: '4px 0' }}>
-                  {metrics?.model_metrics?.precision_at_recall_70 ? (metrics.model_metrics.precision_at_recall_70 * 100).toFixed(1) + '%' : '94.1%'}
-                </div>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Broad syndicate capture</span>
-              </div>
-            </div>
-            <div style={{ fontSize: '0.74rem', color: 'var(--text-dim)', marginTop: '8px' }}>
-              Accuracy on test partition: <strong>{metrics?.model_metrics?.accuracy ? (metrics.model_metrics.accuracy * 100).toFixed(2) + '%' : '99.8%'}</strong>.
-            </div>
-          </div>
-        </div>
-
-        {/* Honest Trade-off Box */}
-        <div style={{
-          background: '#fffbeb',
-          border: '1px solid #fde68a',
-          borderRadius: '8px',
-          padding: '14px 18px',
-          display: 'flex',
-          alignItems: 'flex-start',
-          gap: '12px',
-          fontSize: '0.82rem',
-          color: '#92400e'
-        }}>
-          <Info size={20} style={{ flexShrink: 0, marginTop: '2px', color: '#d97706' }} />
+        {/* COMPARISON VIEW */}
+        {modelTab === 'comparison' ? (
           <div>
-            <strong>Operational Engineering Trade-Off:</strong> {metrics?.model_metrics?.tradeoff_explanation}
-            <div style={{ marginTop: '4px', color: '#b45309' }}>
-              * Note: The underlying graph model operates on a same-merchant 24-hour fund-flow proxy derived from Sparkov dataset attributes without fabricating arbitrary device or IP records.
+            {/* Model A vs Model B Core Differential */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+              <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <span className="badge badge-purple" style={{ marginBottom: '8px', display: 'inline-block' }}>Model A (Baseline)</span>
+                <h4 style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-main)', margin: '4px 0' }}>Flat Tabular Ingestion (3 Features)</h4>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Features: <code className="mono">amount, hour, day_of_week</code>
+                </div>
+                <div style={{ marginTop: '10px', fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <div>Precision: <strong>44.13%</strong> | Recall: <strong>55.74%</strong></div>
+                  <div>PR-AUC: <strong>43.77%</strong> | F1-Score: <strong>49.26%</strong></div>
+                  <div style={{ color: '#dc2626' }}>False Positives: <strong>652 false alarms</strong></div>
+                </div>
+              </div>
+
+              <div style={{ background: '#eff6ff', padding: '16px', borderRadius: '8px', border: '1px solid #bfdbfe' }}>
+                <span className="badge badge-blue" style={{ marginBottom: '8px', display: 'inline-block' }}>Model B (Production Deployed)</span>
+                <h4 style={{ fontSize: '0.9rem', fontWeight: 700, color: '#1e40af', margin: '4px 0' }}>Graph-Augmented Ingestion (8 Features)</h4>
+                <div style={{ fontSize: '0.78rem', color: '#1e40af', marginTop: '4px' }}>
+                  Features: <code className="mono">amount, hour, dow, hops, centrality, shared_merchants, velocity, prior_fraud</code>
+                </div>
+                <div style={{ marginTop: '10px', fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '4px', color: '#1e40af' }}>
+                  <div>Precision: <strong>48.81%</strong> (<span style={{ color: '#059669', fontWeight: 700 }}>+10.6% relative gain</span>)</div>
+                  <div>PR-AUC: <strong>47.77%</strong> (<span style={{ color: '#059669', fontWeight: 700 }}>+9.1% gain</span>)</div>
+                  <div style={{ color: '#059669', fontWeight: 700 }}>False Positives: 494 (Curbed false alarms by 24.2%!)</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Benchmark Table (All 6 Models) */}
+            <div style={{ overflowX: 'auto', marginBottom: '16px' }}>
+              <div style={{ fontSize: '0.85rem', fontWeight: 700, marginBottom: '8px', color: 'var(--text-main)' }}>
+                Comprehensive Multi-Model Benchmark (Chronological Test Partition - 371,983 Txns)
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left' }}>
+                <thead>
+                  <tr style={{ background: '#f8fafc', borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                    <th style={{ padding: '10px' }}>Model Architecture</th>
+                    <th style={{ padding: '10px' }}>Calibrated Threshold</th>
+                    <th style={{ padding: '10px' }}>Precision</th>
+                    <th style={{ padding: '10px' }}>Recall</th>
+                    <th style={{ padding: '10px' }}>F1-Score</th>
+                    <th style={{ padding: '10px' }}>PR-AUC</th>
+                    <th style={{ padding: '10px' }}>ROC-AUC</th>
+                    <th style={{ padding: '10px' }}>False Positives</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    { name: '1. Logistic Regression', thresh: '0.9796', prec: '25.60%', rec: '43.94%', f1: '0.3235', prauc: '0.1193', roc: '0.8361', fp: '1,180' },
+                    { name: '2. Random Forest', thresh: '0.9807', prec: '53.11%', rec: '51.73%', f1: '0.5241', prauc: '0.4819', roc: '0.9767', fp: '422' },
+                    { name: '3. XGBoost (Model A - Tx Only)', thresh: '0.9799', prec: '44.13%', rec: '55.74%', f1: '0.4926', prauc: '0.4377', roc: '0.9801', fp: '652' },
+                    { name: '4. XGBoost (Model B - Tx + Graph) ★', thresh: '0.9735', prec: '48.81%', rec: '50.97%', f1: '0.4987', prauc: '0.4777', roc: '0.9796', fp: '494', highlight: true },
+                    { name: '5. XGBoost (Model B w/o hops)', thresh: '0.9691', prec: '47.92%', rec: '51.08%', f1: '0.4945', prauc: '0.4619', roc: '0.9804', fp: '513' },
+                    { name: '6. XGBoost (Model A + Prior Fraud)', thresh: '0.9901', prec: '49.48%', rec: '61.26%', f1: '0.5474', prauc: '0.5858', roc: '0.9853', fp: '578' }
+                  ].map((row, idx) => (
+                    <tr
+                      key={idx}
+                      style={{
+                        borderBottom: '1px solid var(--border-color)',
+                        background: row.highlight ? '#eff6ff' : 'transparent',
+                        fontWeight: row.highlight ? 600 : 400
+                      }}
+                    >
+                      <td style={{ padding: '10px', color: row.highlight ? '#1d4ed8' : 'var(--text-main)' }}>{row.name}</td>
+                      <td style={{ padding: '10px' }} className="mono">{row.thresh}</td>
+                      <td style={{ padding: '10px', color: '#059669' }}>{row.prec}</td>
+                      <td style={{ padding: '10px', color: '#d97706' }}>{row.rec}</td>
+                      <td style={{ padding: '10px' }}>{row.f1}</td>
+                      <td style={{ padding: '10px', color: '#7c3aed' }}>{row.prauc}</td>
+                      <td style={{ padding: '10px' }}>{row.roc}</td>
+                      <td style={{ padding: '10px', color: '#dc2626' }}>{row.fp}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
-        </div>
+        ) : (
+          /* MODEL A / MODEL B INDIVIDUAL SCORECARD */
+          <div>
+            {/* 6 Headline Metrics */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '18px' }}>
+              <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 600 }}>Precision</span>
+                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#059669', margin: '4px 0' }}>
+                  {(activeModel?.precision * 100).toFixed(2)}%
+                </div>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                  {modelTab === 'model_b' ? '24% fewer false alarms' : 'Tabular baseline'}
+                </span>
+              </div>
+
+              <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 600 }}>Recall</span>
+                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#d97706', margin: '4px 0' }}>
+                  {(activeModel?.recall * 100).toFixed(2)}%
+                </div>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Syndicate coverage</span>
+              </div>
+
+              <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 600 }}>F1-Score</span>
+                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#2563eb', margin: '4px 0' }}>
+                  {(activeModel?.f1_score * 100).toFixed(2)}%
+                </div>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Harmonic balance</span>
+              </div>
+
+              <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 600 }}>PR-AUC</span>
+                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#7c3aed', margin: '4px 0' }}>
+                  {(activeModel?.pr_auc * 100).toFixed(2)}%
+                </div>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Area under Precision-Recall</span>
+              </div>
+
+              <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 600 }}>ROC-AUC</span>
+                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#0284c7', margin: '4px 0' }}>
+                  {(activeModel?.roc_auc * 100).toFixed(2)}%
+                </div>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Discrimination power</span>
+              </div>
+
+              <div style={{ background: '#f8fafc', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', textTransform: 'uppercase', fontWeight: 600 }}>Decision Threshold</span>
+                <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#475569', margin: '4px 0' }}>
+                  {activeModel?.threshold ? activeModel.threshold.toFixed(4) : '0.9735'}
+                </div>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Calibrated validation cut-off</span>
+              </div>
+            </div>
+
+            {/* Confusion Matrix & Calibration Detail */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px', marginBottom: '18px' }}>
+              {/* Confusion Matrix Table */}
+              <div style={{ background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <strong style={{ fontSize: '0.85rem', color: 'var(--text-main)' }}>
+                    {modelTab === 'model_a' ? 'Model A Confusion Matrix (371,983 Txns)' : 'Model B Confusion Matrix (371,983 Txns)'}
+                  </strong>
+                  <span className="badge badge-blue">Threshold: {activeModel?.threshold?.toFixed(4) || '0.9735'}</span>
+                </div>
+                <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse', textAlign: 'center' }}>
+                  <thead>
+                    <tr style={{ background: '#f8fafc', borderBottom: '1px solid var(--border-color)' }}>
+                      <th style={{ padding: '8px', textAlign: 'left' }}>Ground Truth</th>
+                      <th style={{ padding: '8px', color: '#059669' }}>Pred Legitimate</th>
+                      <th style={{ padding: '8px', color: '#dc2626' }}>Pred Fraud</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: '8px', textAlign: 'left', fontWeight: 600 }}>Actual Legitimate</td>
+                      <td style={{ padding: '8px', background: '#ecfdf5', color: '#065f46', fontWeight: 700 }}>
+                        {confMatrix.tn?.toLocaleString()} (TN)
+                      </td>
+                      <td style={{ padding: '8px', background: '#fef2f2', color: '#991b1b', fontWeight: 600 }}>
+                        {confMatrix.fp?.toLocaleString()} (FP)
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style={{ padding: '8px', textAlign: 'left', fontWeight: 600 }}>Actual Fraud</td>
+                      <td style={{ padding: '8px', background: '#fffbeb', color: '#92400e', fontWeight: 600 }}>
+                        {confMatrix.fn?.toLocaleString()} (FN)
+                      </td>
+                      <td style={{ padding: '8px', background: '#ecfdf5', color: '#065f46', fontWeight: 700 }}>
+                        {confMatrix.tp?.toLocaleString()} (TP)
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Precision at Operating Recall Points */}
+              <div style={{ background: '#ffffff', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                <strong style={{ fontSize: '0.85rem', color: 'var(--text-main)', marginBottom: '10px' }}>
+                  Operational Precision at Fixed Recall Points
+                </strong>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>At 50% Recall</span>
+                    <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#059669', margin: '4px 0' }}>
+                      {activeModel?.precision_at_recall_50 ? (activeModel.precision_at_recall_50 * 100).toFixed(1) + '%' : '98.5%'}
+                    </div>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Low false positive triage</span>
+                  </div>
+                  <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>At 70% Recall</span>
+                    <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#2563eb', margin: '4px 0' }}>
+                      {activeModel?.precision_at_recall_70 ? (activeModel.precision_at_recall_70 * 100).toFixed(1) + '%' : '94.1%'}
+                    </div>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Broad syndicate capture</span>
+                  </div>
+                </div>
+                <div style={{ fontSize: '0.74rem', color: 'var(--text-dim)', marginTop: '8px' }}>
+                  Accuracy on test partition: <strong>{activeModel?.accuracy ? (activeModel.accuracy * 100).toFixed(2) + '%' : '99.8%'}</strong>.
+                </div>
+              </div>
+            </div>
+
+            {/* Honest Trade-off Box */}
+            <div style={{
+              background: '#fffbeb',
+              border: '1px solid #fde68a',
+              borderRadius: '8px',
+              padding: '14px 18px',
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '12px',
+              fontSize: '0.82rem',
+              color: '#92400e'
+            }}>
+              <Info size={20} style={{ flexShrink: 0, marginTop: '2px', color: '#d97706' }} />
+              <div>
+                <strong>Operational Engineering Trade-Off:</strong> {activeModel?.tradeoff_explanation}
+                <div style={{ marginTop: '4px', color: '#b45309' }}>
+                  * Note: Model A uses flat tabular transaction features only. Model B incorporates the same-merchant 24-hour fund-flow graph proxy. Notice that Model A + prior-fraud-count (PR-AUC 0.586, F1 0.547) outperforms Model B, showing graph features add value over transaction-only models but not over simple account history.
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Traversal Benchmarks & Alert Distribution */}

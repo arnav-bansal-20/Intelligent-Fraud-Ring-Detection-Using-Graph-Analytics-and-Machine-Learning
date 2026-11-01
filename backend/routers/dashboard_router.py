@@ -31,6 +31,7 @@ def load_deployed_model_metrics() -> ModelMetrics:
             p70 = float(mb.get("precision_at_recall_70", 0.2282))
             acc = float(mb.get("accuracy", 0.9966))
             return ModelMetrics(
+                model_name="Model B (Graph-Augmented XGBoost)",
                 precision=prec,
                 recall=rec,
                 f1_score=f1,
@@ -51,6 +52,7 @@ def load_deployed_model_metrics() -> ModelMetrics:
             )
 
     return ModelMetrics(
+        model_name="Model B (Graph-Augmented XGBoost)",
         precision=0.4881,
         recall=0.5097,
         f1_score=0.4987,
@@ -65,6 +67,67 @@ def load_deployed_model_metrics() -> ModelMetrics:
             "Deployed Model B operates at decision threshold 0.9735, achieving 48.81% Precision and 50.97% Recall on the held-out test split."
         )
     )
+
+def load_baseline_model_metrics() -> ModelMetrics:
+    """Read model metrics from models/metrics.json for baseline Model A."""
+    if os.path.exists(METRICS_PATH):
+        with open(METRICS_PATH, "r") as f:
+            all_metrics = json.load(f)
+            ma = all_metrics.get("Model A") or all_metrics.get("3. XGBoost (Model A - Tx Only)", {})
+            prec = float(ma.get("precision", 0.4413))
+            rec = float(ma.get("recall", 0.5574))
+            f1 = float(ma.get("f1", 0.4926))
+            pr_auc = float(ma.get("pr_auc", 0.4377))
+            roc_auc = float(ma.get("roc_auc", 0.9801))
+            thresh = float(ma.get("threshold", 0.9799))
+            cm = ma.get("confusion_matrix", {"tp": 515, "fp": 652, "fn": 409, "tn": 276284})
+            p50 = float(ma.get("precision_at_recall_50", 0.5116))
+            p70 = float(ma.get("precision_at_recall_70", 0.2101))
+            acc = float(ma.get("accuracy", 0.9962))
+            return ModelMetrics(
+                model_name="Model A (Transaction Baseline XGBoost)",
+                precision=prec,
+                recall=rec,
+                f1_score=f1,
+                pr_auc=pr_auc,
+                roc_auc=roc_auc,
+                threshold=thresh,
+                confusion_matrix=cm,
+                precision_at_recall_50=p50,
+                precision_at_recall_70=p70,
+                accuracy=acc,
+                tradeoff_explanation=(
+                    f"Baseline Model A (XGBoost trained strictly on flat tabular features: amount, hour, day_of_week) "
+                    f"operates at threshold {thresh:.4f}. It achieves {prec*100:.2f}% Precision and {rec*100:.2f}% Recall "
+                    f"(PR-AUC: {pr_auc:.4f}). Without graph features, it generates 652 false positive alerts "
+                    f"(32% more false alarms than Graph-Augmented Model B)."
+                )
+            )
+
+    return ModelMetrics(
+        model_name="Model A (Transaction Baseline XGBoost)",
+        precision=0.4413,
+        recall=0.5574,
+        f1_score=0.4926,
+        pr_auc=0.4377,
+        roc_auc=0.9801,
+        threshold=0.9799,
+        confusion_matrix={"tp": 515, "fp": 652, "fn": 409, "tn": 276284},
+        precision_at_recall_50=0.5116,
+        precision_at_recall_70=0.2101,
+        accuracy=0.9962,
+        tradeoff_explanation="Baseline Model A operates at threshold 0.9799 with tabular features only."
+    )
+
+def load_models_comparison() -> list:
+    """Read full model comparison list from models/comparison.csv."""
+    comp_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "models", "comparison.csv"))
+    if os.path.exists(comp_path):
+        import csv
+        with open(comp_path, "r") as f:
+            reader = csv.DictReader(f)
+            return list(reader)
+    return []
 
 @router.get("/metrics", response_model=DashboardMetricsResponse)
 def get_dashboard_metrics(
@@ -125,8 +188,10 @@ def get_dashboard_metrics(
 
     cur.close()
 
-    # 4. Deployed XGBoost Model Metrics (from models/metrics.json)
+    # 4. Deployed XGBoost Model Metrics & Baseline Model A (from models/metrics.json & comparison.csv)
     model_metrics = load_deployed_model_metrics()
+    baseline_model_metrics = load_baseline_model_metrics()
+    models_comparison = load_models_comparison()
 
     return DashboardMetricsResponse(
         open_alerts=open_alerts,
@@ -139,6 +204,8 @@ def get_dashboard_metrics(
         ai_fraud_rate_pct=ai_fraud_rate_pct,
         portfolio_fraud_rate_pct=fraud_rate_pct,
         model_metrics=model_metrics,
+        baseline_model_metrics=baseline_model_metrics,
+        models_comparison=models_comparison,
         decisions_breakdown=decisions_breakdown,
         status_breakdown={
             "open": open_alerts,

@@ -29,6 +29,9 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 120))
 CORS_ORIGIN = os.getenv("CORS_ORIGIN", "http://localhost:5173")
 PORT = int(os.getenv("PORT", 8005))
 
-# Model Path
-MODEL_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models", "fraud_model.joblib"))
+# Model Paths
+MODELS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models"))
+MODEL_PATH = os.path.join(MODELS_DIR, "fraud_model.joblib")
+MODEL_A_PATH = os.path.join(MODELS_DIR, "model_baseline.joblib")
+MODEL_B_PATH = os.path.join(MODELS_DIR, "model_hybrid.joblib")
 
